@@ -126,4 +126,5 @@ jobs:
       - name: Attach to the release
         run: gh release upload "$TAG" dist/monitor-buddy-*.bin dist/Monitor-Buddy-*.zip --clobber --repo ${{ github.repository }}
       - name: Rebuild the Pages mirror
-        run: gh workflow run pages.yml --ref main --repo ${{ github.repository }}
+        # A fork that hosts the flasher elsewhere (casaos/) disables Pages: not an error.
+        run: gh workflow run pages.yml --ref main --repo ${{ github.repository }} || echo "::notice::Pages workflow not available; skipped"
