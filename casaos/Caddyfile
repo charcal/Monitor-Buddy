@@ -8,6 +8,9 @@
 	local_certs # every certificate from Caddy's own local CA
 	skip_install_trust # the container can't install it on your computers; you do that
 	auto_https disable_redirects
+	# A browser visiting by IP sends no name, and inside Docker the connection's
+	# own address is the container's, not the server's. Use the IP certificate.
+	default_sni {$FLASHER_IP}
 }
 
 # The flasher, by name and by IP address. Both are in the certificate.
