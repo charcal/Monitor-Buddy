@@ -23,7 +23,16 @@ export const DEFAULTS = Object.freeze({
   lon: "103.8149",
   temp_unit: "celsius",
   wind_unit: "kmh",
-  pages: Object.freeze({ face: true, clock: true, date: true, weather: true, moon: true, stock: true, github: true }),
+  pages: Object.freeze({ face: true, clock: true, date: true, weather: true, moon: true, stock: true, github: true,
+    ha: true, now: true, cal: true }),
+  bridge_url: "",
+  bridge_key: "",
+  page_secs: 8,
+  auto_page: true,
+  clock_format: "24h",
+  night_from: -1,
+  night_to: 7,
+  night_level: 20,
 });
 
 // Flows, as spec §4. flash: the flow writes firmware; erase: it erases first.
@@ -185,6 +194,7 @@ export function formErrors(state, zones) {
 export function redactLog(text) {
   return String(text)
     .replace(/("stock_key"\s*:\s*)"(?:[^"\\]|\\.)+"/g, '$1"<redacted>"')
+    .replace(/("bridge_key"\s*:\s*)"(?:[^"\\]|\\.)+"/g, '$1"<redacted>"')
     .replace(/("password"\s*:\s*)"(?:[^"\\]|\\.)+"/g, '$1"<redacted>"');
 }
 
@@ -200,6 +210,19 @@ export function stockMessage(res, ticker = "") {
 export function githubMessage(res) {
   if (res.status === "ok") return S.check.github.ok(res.followers, res.repos);
   return S.check.github[res.status] || S.check.github.network;
+}
+
+// checkBridge's result as a sentence: what each of the three pages will show.
+export function bridgeMessage(res) {
+  const B = S.check.bridge;
+  if (res.status !== "ok") return B[res.status] || B.network;
+  const { ha = {}, now = {}, cal = {} } = res.summary || {};
+  const parts = [
+    ha.ok ? B.ha((ha.items || []).length) : ha.setup === false ? B.haOff : B.haError,
+    now.ok === false ? B.nowError : now.playing || now.paused ? B.playing(now.source || "?") : B.idle,
+    cal.ok ? B.cal((cal.events || []).length) : cal.setup === false ? B.calOff : B.calError,
+  ];
+  return B.ok(parts.join(", "));
 }
 
 // The one-line summary under the city search (GUI review, 2026-10-12):
@@ -218,7 +241,7 @@ export function locationSummary(config, placeLabel = "") {
 
 // The pages that show the theme's colours, in the order a theme change tries
 // them (Eric, 2026-10-12): the face never uses the theme.
-export const THEMED_PAGES = Object.freeze(["clock", "date", "weather", "moon", "stock", "github"]);
+export const THEMED_PAGES = Object.freeze(["clock", "date", "weather", "moon", "stock", "github", "ha", "now", "cal"]);
 
 // The preview page a changed setting belongs to, so the preview can jump
 // there (GUI review, Eric 2026-10-12): a page key, "stay" (hold the current
@@ -233,6 +256,11 @@ export function previewPageFor(key, config) {
     case "tz_name": case "tz_rule": return "clock";
     case "ticker": case "stock_key": case "check.stock": return "stock";
     case "github_user": case "check.github": return "github";
+    case "clock_format": return "clock";
+    case "bridge_url": case "bridge_key": case "check.bridge": {
+      const shown = pageList(config);
+      return ["now", "ha", "cal"].find((p) => shown.includes(p)) || "stay";
+    }
     case "mount": return "face";
     case "theme": {
       const shown = pageList(config);

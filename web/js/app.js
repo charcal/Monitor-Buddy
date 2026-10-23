@@ -10,12 +10,12 @@ import { PAGE_KEYS, mergeConfig, makeBackup, readBackup, backupFileName, BadBack
 import { parseConfigH } from "./configh.js";
 import { ruleForZone } from "./tz.js";
 import { searchCity } from "./geocode.js";
-import { checkStock, checkGithub } from "./checks.js";
+import { checkStock, checkGithub, checkBridge } from "./checks.js";
 import { createFace } from "./face.js";
 import { createPreview, THEMES } from "./preview.js";
 import {
   DEFAULTS, FLOWS, newFormState, formToRequest, badgesFor, helpFor, wifiChoices, formErrors,
-  fieldMessage, fromBoard, redactLog, stockMessage, githubMessage, addsSettings,
+  fieldMessage, fromBoard, redactLog, stockMessage, githubMessage, bridgeMessage, addsSettings,
   LOCATION_KEYS, boardLocation, escapeRich, parseRich, joinedWifi, resultKind, WIFI_WAIT_MS,
   previewPageFor, locationSummary, locationMissing, afterRecovery,
 } from "./form.js";
@@ -36,6 +36,7 @@ const app = {
   manifestError: false,
   releases: [],      // what may be installed, newest first
   zones: null,       // the time zone table
+  site: {},          // site.json, when this flasher is self-hosted (casaos/): repo, bridge address
   bp: null,          // the BuddyPort
   info: null,        // the last INFO reply; null on path B
   form: null,        // the form, kept across screens so a retry finds it intact
@@ -761,6 +762,19 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
       h("div", { class: "radios__items" }, items), error);
   }
 
+  function selectField({ key, label, help, options, value, set }) {
+    const id = uid("sel");
+    const select = h("select", { id, class: "input" }, options.map(([v, text]) =>
+      h("option", { value: String(v), selected: v === value }, text)));
+    select.addEventListener("change", () => {
+      const picked = options.find(([v]) => String(v) === select.value);
+      set(picked ? picked[0] : select.value);
+      changed(key);
+    });
+    const error = errorSlot(key, [select]);
+    return { input: select, el: h("div", { class: "field" }, head(h("label", { for: id }, label), label, help, key), select, error) };
+  }
+
   function switchRow({ label, checked, set, help, badgeKey, errorKey }) {
     const id = uid("s");
     const input = h("input", { type: "checkbox", role: "switch", id, class: "switch", checked });
@@ -969,18 +983,20 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
     const allOff = note(S.form.allOff, "note--info");
     const stockHidden = note(S.form.stockHidden, "note--info");
     const githubHidden = note(S.form.githubHidden, "note--info");
+    const bridgeHidden = note(S.form.bridgeHidden, "note--info");
     // The legend is the section's title, so the help button sits next to it.
     form.append(h("section", { class: "section" },
       h("fieldset", { class: "field pages" },
         h("legend", { class: "section__legend" }, head(h("h2", { class: "section__title" }, S.form.pages), S.form.pages, "pages", "pages")),
         h("div", { class: "pages__grid" }, pageRows.map((r) => r.el)),
         errorSlot("pages", [])),
-      allOff, stockHidden, githubHidden));
+      allOff, stockHidden, githubHidden, bridgeHidden));
     refreshers.push(() => {
       const pages = f.config.pages || {};
       allOff.hidden = PAGE_KEYS.some((p) => pages[p]);
       stockHidden.hidden = !(pages.stock && !f.config.stock_key);
       githubHidden.hidden = !(pages.github && !f.config.github_user);
+      bridgeHidden.hidden = !((pages.ha || pages.now || pages.cal) && !f.config.bridge_url);
     });
 
     // 5. Stock.
@@ -1060,6 +1076,75 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
     refreshers.push(() => {
       ghCheck.disabled = !f.config.github_user;
       ghOff.hidden = !!f.config.github_user;
+    });
+
+    // 6b. Home server: buddy-bridge, for the Home, Now playing and Calendar pages.
+    const brResult = h("p", { class: "check__result", "aria-live": "polite" });
+    const brCheck = btn(S.form.check, async () => {
+      brResult.textContent = S.check.checking;
+      brResult.dataset.state = "";
+      brCheck.disabled = true;
+      const asked = f.config.bridge_key;
+      const res = await checkBridge(window.fetch.bind(window), asked, f.config.clock_format === "12h");
+      if (!alive || asked !== f.config.bridge_key) return;
+      brCheck.disabled = false;
+      brResult.textContent = bridgeMessage(res);
+      brResult.dataset.state = res.status === "ok" ? "ok" : "bad";
+      if (res.status === "ok") app.live = { ...app.live, bridge: res.summary };
+      refresh();
+      jumpFor("check.bridge");
+    });
+    const bridgeUrl = textField({
+      key: "bridge_url", label: S.form.bridgeUrl, help: "bridge_url", value: f.config.bridge_url, hint: S.form.bridgeEmpty,
+      attrs: { inputmode: "url", placeholder: S.form.bridgeUrlPlaceholder },
+      set: (v) => { f.config.bridge_url = v.trim(); },
+    });
+    const bridgeKey = textField({
+      key: "bridge_key", label: S.form.bridgeKey, help: "bridge_key", value: f.config.bridge_key, hint: S.form.bridgeKeyHint,
+      set: (v) => { f.config.bridge_key = v.trim(); delete app.live.bridge; brResult.textContent = ""; },
+    });
+    // On CasaOS, site.json says where the bridge is for the Buddy (its LAN address).
+    const suggested = typeof app.site.bridge_device_url === "string" ? app.site.bridge_device_url : "";
+    const useServer = suggested ? btn(S.form.useThisServer(suggested), () => {
+      f.config.bridge_url = suggested;
+      bridgeUrl.input.value = suggested;
+      changed("bridge_url");
+    }) : null;
+    form.append(section(S.form.sections.bridge, bridgeUrl.el, useServer ? h("div", { class: "check" }, useServer) : null,
+      bridgeKey.el, h("div", { class: "check" }, brCheck, brResult), note(S.form.bridgeCheckHere)));
+
+    // 6c. Behaviour: page timing, clock format and night dimming.
+    const pageSecs = textField({
+      key: "page_secs", label: S.form.pageSecs, help: "page_secs", value: String(f.config.page_secs ?? ""), type: "number",
+      attrs: { inputmode: "numeric", min: "3", max: "120", step: "1" },
+      set: (v) => { f.config.page_secs = /^\d+$/.test(v.trim()) ? Number(v.trim()) : v; },
+    });
+    const autoPage = switchRow({
+      label: S.form.autoPage, help: "auto_page", checked: f.config.auto_page !== false, badgeKey: "auto_page", errorKey: "auto_page",
+      set: (v) => { f.config.auto_page = v; },
+    });
+    const hours = Array.from({ length: 24 }, (_, i) => [i, S.form.hour(i)]);
+    const nightFrom = selectField({ key: "night_from", label: S.form.nightFrom, help: "night_from", value: f.config.night_from,
+      options: [[-1, S.form.nightOff], ...hours], set: (v) => { f.config.night_from = v; } });
+    const nightTo = selectField({ key: "night_to", label: S.form.nightTo, help: "night_to", value: f.config.night_to,
+      options: hours, set: (v) => { f.config.night_to = v; } });
+    const nightLevel = selectField({ key: "night_level", label: S.form.nightLevel, help: "night_level", value: f.config.night_level,
+      options: [0, 5, 10, 20, 30, 50, 75, 100].map((n) => [n, S.form.nightLevelValue(n)]), set: (v) => { f.config.night_level = v; } });
+    // A level from a backup or the board that isn't in the list still shows.
+    if (![0, 5, 10, 20, 30, 50, 75, 100].includes(f.config.night_level) && Number.isInteger(f.config.night_level)) {
+      nightLevel.input.append(h("option", { value: String(f.config.night_level), selected: true }, S.form.nightLevelValue(f.config.night_level)));
+    }
+    form.append(section(S.form.sections.behaviour,
+      h("div", { class: "grid-2 grid-2--narrow-first" }, pageSecs.el,
+        radioGroup({ key: "clock_format", legend: S.form.clockFormat, help: "clock_format", value: f.config.clock_format,
+          options: [["24h", S.form.clock24], ["12h", S.form.clock12]], set: (v) => { f.config.clock_format = v; } })),
+      autoPage.el,
+      h("fieldset", { class: "field subgroup" }, h("legend", {}, S.form.night),
+        h("div", { class: "grid-2" }, nightFrom.el, nightTo.el), nightLevel.el)));
+    refreshers.push(() => {
+      const off = f.config.night_from === -1;
+      nightTo.el.hidden = off;
+      nightLevel.el.hidden = off;
     });
 
     // 7. Look.
@@ -1550,6 +1635,13 @@ function chrome() {
   const beta = document.getElementById("beta");
   beta.textContent = S.beta;
   beta.hidden = !BETA;
+  // A self-hosted fork points its project and issue links at itself.
+  const repo = /^[\w.-]+\/[\w.-]+$/.test(app.site.repo || "") ? `https://github.com/${app.site.repo}` : null;
+  if (repo) {
+    S.about.projectUrl = repo;
+    S.about.guideUrl = `${repo}#readme`;
+    S.about.issueUrl = `${repo}/issues`;
+  }
   const about = document.getElementById("about");
   about.replaceChildren(
     h("h2", {}, S.about.heading),
@@ -1576,6 +1668,17 @@ async function loadManifest() {
   }
 }
 
+// Optional: written by the CasaOS sync (casaos/sync/sync.py). GitHub Pages
+// has none, which is fine.
+async function loadSite() {
+  try {
+    const r = await fetch("site.json", { cache: "no-store" });
+    if (!r.ok) return;
+    const site = await r.json();
+    if (site && typeof site === "object" && !Array.isArray(site)) app.site = site;
+  } catch { /* no site.json: defaults */ }
+}
+
 async function loadZones() {
   try {
     const r = await fetch("vendor/posix_tz_db/zones.json");
@@ -1586,6 +1689,7 @@ async function loadZones() {
   }
 }
 
+await loadSite();
 chrome();
 await Promise.all([loadManifest(), loadZones()]);
 showStart();

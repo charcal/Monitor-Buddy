@@ -1,0 +1,46 @@
+# Monitor Buddy on CasaOS: the web flasher over HTTPS, and the bridge behind it.
+#
+# Web Serial (how the flasher talks to the Buddy) only works on a secure page,
+# so the flasher must be served over HTTPS. Caddy signs its own certificate
+# with a local certificate authority; install that authority's root once on
+# each computer you flash from (README: "Trust the certificate").
+{
+	local_certs # every certificate from Caddy's own local CA
+	skip_install_trust # the container can't install it on your computers; you do that
+	auto_https disable_redirects
+}
+
+# The flasher, by name and by IP address. Both are in the certificate.
+https://{$FLASHER_HOST}:{$FLASHER_PORT}, https://{$FLASHER_IP}:{$FLASHER_PORT} {
+	encode gzip
+
+	# The bridge, for the flasher's Check button and live preview. The Buddy
+	# itself talks to the bridge directly on port 8787.
+	handle_path /bridge/* {
+		reverse_proxy bridge:8787
+	}
+
+	handle {
+		root * /site/current
+		file_server
+		# The firmware list, the site settings and the code must never be stale.
+		header /firmware/* Cache-Control "no-store"
+		header /site.json Cache-Control "no-store"
+		header /index.html Cache-Control "no-cache"
+		header / Cache-Control "no-cache"
+	}
+}
+
+# Plain HTTP: hands out the root certificate to trust, and sends everything
+# else to the HTTPS flasher.
+http://{$FLASHER_HOST}:{$CERT_PORT}, http://{$FLASHER_IP}:{$CERT_PORT} {
+	handle /root.crt {
+		root * /data/caddy/pki/authorities/local
+		file_server
+		header Content-Type "application/x-x509-ca-cert"
+		header Content-Disposition "attachment; filename=monitor-buddy-local-ca.crt"
+	}
+	handle {
+		redir https://{host}:{$FLASHER_PORT}{uri}
+	}
+}

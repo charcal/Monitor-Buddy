@@ -46,3 +46,27 @@ export async function checkGithub(fetchFn, user) {
   if (body === null) return { status: "network" };
   return { status: "ok", followers: body.followers, repos: body.public_repos };
 }
+
+// The bridge served next to this page (casaos/Caddyfile proxies /bridge/ to
+// it). The browser can't ask the address the Buddy uses: it's plain http on
+// the LAN, which an https page may not fetch. So this checks the bridge on
+// this server, and its answer doubles as live data for the preview.
+export const BRIDGE_PATH = "bridge/api/summary";
+
+// -> { status: "ok", summary } | { status: "bad_key" | "not_here" | "network" }
+export async function checkBridge(fetchFn, key = "", fmt12 = false) {
+  let res;
+  try {
+    const url = `${BRIDGE_PATH}${fmt12 ? "?fmt=12" : ""}`;
+    res = await fetchFn(url, { cache: "no-store", headers: key ? { "X-Buddy-Key": key } : {} });
+  } catch {
+    return { status: "network" };
+  }
+  if (res.status === 401) return { status: "bad_key" };
+  if (res.status === 404) return { status: "not_here" };
+  if (!res.ok) return { status: "network" };
+  const body = await bodyOf(res);
+  // GitHub Pages or a plain web server answers with its own page, not JSON.
+  if (body === null || typeof body !== "object" || !("ha" in body)) return { status: "not_here" };
+  return { status: "ok", summary: body };
+}

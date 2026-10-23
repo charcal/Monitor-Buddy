@@ -8,8 +8,12 @@
 // Top-level keys in the firmware's order (ALL_KEYS) and the page names
 // (SETTINGS_PAGE_KEYS).
 export const KEYS = ["mount", "theme", "github_user", "tz_name", "tz_rule", "ticker",
-  "stock_key", "lat", "lon", "temp_unit", "wind_unit", "pages"];
-export const PAGE_KEYS = ["face", "clock", "date", "weather", "moon", "stock", "github"];
+  "stock_key", "lat", "lon", "temp_unit", "wind_unit", "pages",
+  "bridge_url", "bridge_key", "page_secs", "auto_page", "clock_format",
+  "night_from", "night_to", "night_level"];
+export const PAGE_KEYS = ["face", "clock", "date", "weather", "moon", "stock", "github", "ha", "now", "cal"];
+// The pages that come from the bridge: hidden while bridge_url is empty.
+export const BRIDGE_PAGES = ["ha", "now", "cal"];
 
 const DIGITS = "0123456789";
 const ALNUM = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
@@ -21,7 +25,25 @@ const TEXT_RULES = {
   tz_rule: { minLen: 1, maxLen: 64, chars: ALNUM + "<>+-:,./", error: "1-64 characters of a POSIX TZ rule" },
   ticker: { minLen: 1, maxLen: 10, chars: DIGITS + "ABCDEFGHIJKLMNOPQRSTUVWXYZ.-", error: "1-10 characters: A-Z, 0-9, . and -" },
   stock_key: { minLen: 0, maxLen: 64, chars: ALNUM + "_-", error: "0-64 characters: letters, digits, _ and -" },
+  bridge_key: { minLen: 0, maxLen: 64, chars: ALNUM + "_-", error: "0-64 characters: letters, digits, _ and -" },
 };
+
+// applyUrl: "" or http(s):// then a host, at most 80 characters, only letters,
+// digits and . - _ ~ : / % after the scheme.
+const URL_MAX_LEN = 80;
+const URL_CHARS = ALNUM + ".-_~:/%";
+const URL_ERROR = "empty, or http:// or https:// and a host, up to 80 characters";
+
+function urlError(v) {
+  if (typeof v !== "string" || v.length > URL_MAX_LEN) return URL_ERROR;
+  if (v === "") return null;
+  const skip = v.startsWith("http://") ? 7 : v.startsWith("https://") ? 8 : 0;
+  if (!skip || v.length === skip || v[skip] === "/" || v[skip] === ":") return URL_ERROR;
+  for (const c of v.slice(skip)) if (!URL_CHARS.includes(c)) return URL_ERROR;
+  return null;
+}
+
+const intError = (v, lo, hi, message) => (Number.isInteger(v) && v >= lo && v <= hi ? null : message);
 
 // applyCoordinate: at most 15 characters (char lat[16]), only 0123456789.+- ,
 // then a plain decimal within the limit. The pattern is what strtod accepts
@@ -61,6 +83,13 @@ function keyError(key, v) {
     case "lon": return coordinateError(v, 180, "a number from -180 to 180");
     case "temp_unit": return choiceError(v, "celsius", "fahrenheit", 'must be "celsius" or "fahrenheit"');
     case "wind_unit": return choiceError(v, "kmh", "mph", 'must be "kmh" or "mph"');
+    case "bridge_url": return urlError(v);
+    case "clock_format": return choiceError(v, "24h", "12h", 'must be "24h" or "12h"');
+    case "auto_page": return typeof v === "boolean" ? null : "must be true or false";
+    case "page_secs": return intError(v, 3, 120, "must be a whole number 3-120");
+    case "night_from": return intError(v, -1, 23, "must be a whole number -1 (off) to 23");
+    case "night_to": return intError(v, 0, 23, "must be a whole number 0-23");
+    case "night_level": return intError(v, 0, 100, "must be a whole number 0-100");
     default: return "unknown key";
   }
 }

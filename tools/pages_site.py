@@ -10,13 +10,16 @@ whole mirror from them every time.
 """
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-REPO_URL = "https://github.com/IdefixRC/Monitor-Buddy"
+# The release notes links point at whichever repo builds the site: a fork's
+# Actions (and casaos/sync) set GITHUB_REPOSITORY to owner/name.
+REPO_URL = f"https://github.com/{os.environ.get('GITHUB_REPOSITORY') or 'IdefixRC/Monitor-Buddy'}"
 FIRST_VERSION = (1, 2, 0)   # older firmware has no runtime settings
 MANIFEST_FORMAT = 1
 _TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(?:-rc(\d+))?$")

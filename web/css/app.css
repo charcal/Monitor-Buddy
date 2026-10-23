@@ -1129,6 +1129,23 @@ fieldset.field > legend {
   text-transform: uppercase;
 }
 
+/* A group of related fields inside a section (night dimming), set off by a rule. */
+fieldset.field.subgroup {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.subgroup > legend {
+  float: left;          /* keeps the legend inside the padding, under the rule */
+  margin-bottom: 0.35rem;
+  font-weight: 700;
+}
+
+.subgroup > legend + * {
+  clear: left;
+}
+
 select.input {
   cursor: pointer;
 }

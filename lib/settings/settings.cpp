@@ -6,7 +6,7 @@
 #include <stddef.h>
 
 const char *const SETTINGS_PAGE_KEYS[SETTINGS_PAGE_COUNT] = {
-  "face", "clock", "date", "weather", "moon", "stock", "github"};
+  "face", "clock", "date", "weather", "moon", "stock", "github", "ha", "now", "cal"};
 
 bool tzRuleFromOffset(float hours, char *out, size_t outLen) {
   if (!(hours >= -12.0f && hours <= 14.0f)) return false;
@@ -53,16 +53,20 @@ const TextKey TEXT_KEYS[] = {
    "ABCDEFGHIJKLMNOPQRSTUVWXYZ.-", DIGITS, "1-10 characters: A-Z, 0-9, . and -"},
   {"stock_key", offsetof(Settings, stockKey), sizeof(Settings::stockKey), 0,
    "_-", ALNUM, "0-64 characters: letters, digits, _ and -"},
+  {"bridge_key", offsetof(Settings, bridgeKey), sizeof(Settings::bridgeKey), 0,
+   "_-", ALNUM, "0-64 characters: letters, digits, _ and -"},
 };
 
 // Every top-level key, for "added" and for canonical (static) key names.
 const char *const ALL_KEYS[] = {
   "mount", "theme", "github_user", "tz_name", "tz_rule", "ticker", "stock_key",
-  "lat", "lon", "temp_unit", "wind_unit", "pages"};
+  "lat", "lon", "temp_unit", "wind_unit", "pages",
+  "bridge_url", "bridge_key", "page_secs", "auto_page", "clock_format",
+  "night_from", "night_to", "night_level"};
 
 const char *const PAGE_PATHS[SETTINGS_PAGE_COUNT] = {
   "pages.face", "pages.clock", "pages.date", "pages.weather",
-  "pages.moon", "pages.stock", "pages.github"};
+  "pages.moon", "pages.stock", "pages.github", "pages.ha", "pages.now", "pages.cal"};
 
 bool allowedChar(char c, const TextKey &k) {
   return strchr(k.base, c) != nullptr || strchr(k.extra, c) != nullptr;
@@ -108,6 +112,44 @@ bool applyChoice(JsonVariantConst v, const char *a, const char *b, bool &isB,
   return false;
 }
 
+// A whole number in [lo, hi]. JSON 3.0 is not a whole number to ArduinoJson.
+bool applyInt(JsonVariantConst v, int lo, int hi, int &out, const char *msg, const char *&err) {
+  err = msg;
+  if (!v.is<int>()) return false;
+  int n = v.as<int>();
+  if (n < lo || n > hi) return false;
+  out = n;
+  return true;
+}
+
+bool applyBool(JsonVariantConst v, bool &out, const char *&err) {
+  err = "must be true or false";
+  if (!v.is<bool>()) return false;
+  out = v.as<bool>();
+  return true;
+}
+
+// "" (no bridge), or http:// or https:// then a host and an optional port and
+// path. The value is joined straight into request URLs, so no spaces, queries,
+// fragments or credentials: only letters, digits and . - _ ~ : / %.
+bool applyUrl(JsonVariantConst v, char *dst, size_t size, const char *&err) {
+  err = "empty, or http:// or https:// and a host, up to 80 characters";
+  if (!v.is<const char *>()) return false;
+  const char *str = v.as<const char *>();
+  size_t n = strlen(str);
+  if (n > size - 1) return false;
+  if (n == 0) { dst[0] = '\0'; return true; }
+  size_t skip;
+  if (strncmp(str, "http://", 7) == 0) skip = 7;
+  else if (strncmp(str, "https://", 8) == 0) skip = 8;
+  else return false;
+  if (n == skip || str[skip] == '/' || str[skip] == ':') return false;   // no host
+  for (size_t i = skip; i < n; i++)
+    if (!strchr(ALNUM, str[i]) && !strchr(".-_~:/%", str[i])) return false;
+  memcpy(dst, str, n + 1);
+  return true;
+}
+
 // Validates one top-level key (not "pages") and writes it into s on success.
 // Returns false and sets err when invalid; s is untouched then.
 bool applyKey(const char *key, JsonVariantConst v, Settings &s, const char *&err) {
@@ -132,6 +174,33 @@ bool applyKey(const char *key, JsonVariantConst v, Settings &s, const char *&err
                        "must be \"celsius\" or \"fahrenheit\"", err);
   if (strcmp(key, "wind_unit") == 0)
     return applyChoice(v, "kmh", "mph", s.windMph, "must be \"kmh\" or \"mph\"", err);
+  if (strcmp(key, "bridge_url") == 0)
+    return applyUrl(v, s.bridgeUrl, sizeof(s.bridgeUrl), err);
+  if (strcmp(key, "clock_format") == 0)
+    return applyChoice(v, "24h", "12h", s.clock12h, "must be \"24h\" or \"12h\"", err);
+  if (strcmp(key, "auto_page") == 0)
+    return applyBool(v, s.autoPage, err);
+  int n = 0;
+  if (strcmp(key, "page_secs") == 0) {
+    if (!applyInt(v, 3, 120, n, "must be a whole number 3-120", err)) return false;
+    s.pageSecs = (uint8_t)n;
+    return true;
+  }
+  if (strcmp(key, "night_from") == 0) {
+    if (!applyInt(v, -1, 23, n, "must be a whole number -1 (off) to 23", err)) return false;
+    s.nightFrom = (int8_t)n;
+    return true;
+  }
+  if (strcmp(key, "night_to") == 0) {
+    if (!applyInt(v, 0, 23, n, "must be a whole number 0-23", err)) return false;
+    s.nightTo = (uint8_t)n;
+    return true;
+  }
+  if (strcmp(key, "night_level") == 0) {
+    if (!applyInt(v, 0, 100, n, "must be a whole number 0-100", err)) return false;
+    s.nightLevel = (uint8_t)n;
+    return true;
+  }
   err = "unknown key";
   return false;
 }
@@ -212,6 +281,14 @@ void settingsToJson(const Settings &s, JsonObject out) {
   out["wind_unit"]   = s.windMph ? "mph" : "kmh";
   JsonObject pages = out["pages"].to<JsonObject>();
   for (uint8_t i = 0; i < SETTINGS_PAGE_COUNT; i++) pages[SETTINGS_PAGE_KEYS[i]] = s.pages[i];
+  out["bridge_url"]   = (const char *)s.bridgeUrl;
+  out["bridge_key"]   = (const char *)s.bridgeKey;
+  out["page_secs"]    = s.pageSecs;
+  out["auto_page"]    = s.autoPage;
+  out["clock_format"] = s.clock12h ? "12h" : "24h";
+  out["night_from"]   = s.nightFrom;
+  out["night_to"]     = s.nightTo;
+  out["night_level"]  = s.nightLevel;
 }
 
 bool wifiValidate(JsonVariantConst wifi, char *ssid, size_t ssidLen,

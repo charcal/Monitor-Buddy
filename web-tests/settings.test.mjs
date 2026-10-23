@@ -8,7 +8,10 @@ import {
 const DEFAULTS = {
   mount: "left", theme: 2, github_user: "IdefixRC", tz_name: "Asia/Singapore", tz_rule: "<+08>-8",
   ticker: "AAPL", stock_key: "", lat: "1.3119", lon: "103.8149", temp_unit: "celsius", wind_unit: "kmh",
-  pages: { face: true, clock: true, date: true, weather: true, moon: true, stock: true, github: true },
+  pages: { face: true, clock: true, date: true, weather: true, moon: true, stock: true, github: true,
+    ha: true, now: true, cal: true },
+  bridge_url: "", bridge_key: "", page_secs: 8, auto_page: true, clock_format: "24h",
+  night_from: -1, night_to: 7, night_level: 20,
 };
 
 const bad = (patch, key) => {
@@ -27,11 +30,37 @@ const good = (patch) => {
 
 test("KEYS are the firmware's keys in the firmware's order", () => {
   assert.deepEqual(KEYS, ["mount", "theme", "github_user", "tz_name", "tz_rule", "ticker",
-    "stock_key", "lat", "lon", "temp_unit", "wind_unit", "pages"]);
+    "stock_key", "lat", "lon", "temp_unit", "wind_unit", "pages",
+    "bridge_url", "bridge_key", "page_secs", "auto_page", "clock_format",
+    "night_from", "night_to", "night_level"]);
 });
 
 test("PAGE_KEYS are the firmware's pages in order", () => {
-  assert.deepEqual(PAGE_KEYS, ["face", "clock", "date", "weather", "moon", "stock", "github"]);
+  assert.deepEqual(PAGE_KEYS, ["face", "clock", "date", "weather", "moon", "stock", "github", "ha", "now", "cal"]);
+});
+
+// -- settings version 2: the bridge and behaviour keys ------------------------
+// The same cases as test_merge_bridge_url_rules and
+// test_merge_new_number_and_choice_ranges in test/test_settings.
+
+test("bridge_url: empty or http(s) with a host, nothing that breaks a URL", () => {
+  for (const v of ["", "http://192.168.86.48:8787", "https://cal-mini.local:8443/bridge", "http://cal-mini.local/bridge/"]) {
+    good({ bridge_url: v });
+  }
+  for (const v of ["192.168.86.48:8787", "ftp://x", "http://", "http:///x", "http://a b", "http://h/api?x=1",
+    "http://user:pw@host", "http://h/#frag", `http://${"a".repeat(76)}.com`, 5, null]) {
+    bad({ bridge_url: v }, "bridge_url");
+  }
+});
+
+test("page timing, clock format and night dimming ranges", () => {
+  good({ page_secs: 3, night_from: -1, night_to: 23, night_level: 100, clock_format: "12h", auto_page: false });
+  good({ page_secs: 120, night_from: 23, night_to: 0, night_level: 0, clock_format: "24h", auto_page: true });
+  for (const [key, v] of [["page_secs", 2], ["page_secs", 121], ["page_secs", 7.5], ["page_secs", "8"],
+    ["night_from", 24], ["night_from", -2], ["night_to", -1], ["night_level", 101],
+    ["clock_format", "am"], ["auto_page", "yes"], ["bridge_key", "a b"]]) {
+    bad({ [key]: v }, key);
+  }
 });
 
 // -- validateConfig: whole object -----------------------------------------
@@ -226,7 +255,8 @@ test("merge changes only the patched key", () => {
 });
 test("merge keeps the other pages", () => {
   const m = mergeConfig(DEFAULTS, { pages: { stock: false } });
-  assert.deepEqual(m.pages, { face: true, clock: true, date: true, weather: true, moon: true, stock: false, github: true });
+  assert.deepEqual(m.pages, { face: true, clock: true, date: true, weather: true, moon: true, stock: false, github: true,
+    ha: true, now: true, cal: true });
 });
 test("merge drops unknown keys, v and unknown pages", () => {
   const m = mergeConfig(DEFAULTS, { v: 1, future_key: 1, pages: { future: true }, theme: 4 });

@@ -7,6 +7,8 @@
 
 **A tiny friend for the side of your monitor.** It pulls faces at you, follows your movements with its eyes, and in its spare time tells you the weather, the date, the moon phase, your stock ticker, and your GitHub stats.
 
+> **This fork adds** Home (Home Assistant values), Now playing (Plex, Jellyfin, Spotify) and Calendar pages, served by a small home-server bridge, plus seconds-per-page, auto-advance, 12-hour clock and night dimming settings. The web flasher and the bridge run on CasaOS: see [casaos/README.md](casaos/README.md).
+
 <!-- SHOT: hero.jpg - Monitor-Buddy clipped to the right edge of a monitor, screen showing the animated face, taken slightly from the side so you can see the printed holder -->
 
 ![Monitor-Buddy mounted on a monitor](docs/images/hero.jpg)

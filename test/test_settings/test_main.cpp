@@ -21,6 +21,14 @@ static Settings makeDefaults() {
   s.tempFahrenheit = false;
   s.windMph = false;
   for (uint8_t i = 0; i < SETTINGS_PAGE_COUNT; i++) s.pages[i] = true;
+  strcpy(s.bridgeUrl, "");
+  strcpy(s.bridgeKey, "");
+  s.pageSecs = 8;
+  s.autoPage = true;
+  s.clock12h = false;
+  s.nightFrom = -1;
+  s.nightTo = 7;
+  s.nightLevel = 20;
   return s;
 }
 
@@ -82,9 +90,21 @@ static void test_load_applies_every_key() {
     "\"ticker\":\"AVGO\",\"stock_key\":\"abc123\",\"lat\":\"48.1374\",\"lon\":\"11.5755\","
     "\"temp_unit\":\"fahrenheit\",\"wind_unit\":\"mph\","
     "\"pages\":{\"face\":true,\"clock\":false,\"date\":true,\"weather\":true,"
-    "\"moon\":false,\"stock\":true,\"github\":true}}");
+    "\"moon\":false,\"stock\":true,\"github\":true,\"ha\":false,\"now\":true,\"cal\":true},"
+    "\"bridge_url\":\"http://192.168.86.48:8787\",\"bridge_key\":\"k_1\",\"page_secs\":15,"
+    "\"auto_page\":false,\"clock_format\":\"12h\",\"night_from\":22,\"night_to\":6,\"night_level\":0}");
   Settings out; AddedKeys added; JsonDocument inv;
   settingsLoad(makeDefaults(), file.as<JsonVariantConst>(), out, added, inv.to<JsonObject>());
+  TEST_ASSERT_EQUAL_STRING("http://192.168.86.48:8787", out.bridgeUrl);
+  TEST_ASSERT_EQUAL_STRING("k_1", out.bridgeKey);
+  TEST_ASSERT_EQUAL(15, out.pageSecs);
+  TEST_ASSERT_FALSE(out.autoPage);
+  TEST_ASSERT_TRUE(out.clock12h);
+  TEST_ASSERT_EQUAL(22, out.nightFrom);
+  TEST_ASSERT_EQUAL(6, out.nightTo);
+  TEST_ASSERT_EQUAL(0, out.nightLevel);
+  TEST_ASSERT_FALSE(out.pages[7]);
+  TEST_ASSERT_TRUE(out.pages[9]);
   TEST_ASSERT_TRUE(out.mountRight);
   TEST_ASSERT_EQUAL(4, out.theme);
   TEST_ASSERT_EQUAL_STRING("octo-cat", out.githubUser);
@@ -249,12 +269,85 @@ static void test_merge_rejects_url_breaking_characters() {
   TEST_ASSERT_FALSE(errs["github_user"].isNull());
 }
 
+// ── Settings added in CONFIG_VERSION 2 ────────────────────
+
+// A 1.2.0 board's file: every v1 key, none of the new ones. The new ones keep
+// their defaults and are all reported, so the flasher can badge them "New".
+static void test_load_v1_file_reports_every_new_key() {
+  JsonDocument file;
+  deserializeJson(file,
+    "{\"v\":1,\"mount\":\"left\",\"theme\":2,\"github_user\":\"\",\"tz_name\":\"Europe/London\","
+    "\"tz_rule\":\"GMT0BST,M3.5.0/1,M10.5.0\",\"ticker\":\"AAPL\",\"stock_key\":\"\","
+    "\"lat\":\"51.47\",\"lon\":\"0.08\",\"temp_unit\":\"celsius\",\"wind_unit\":\"mph\","
+    "\"pages\":{\"face\":true,\"clock\":true,\"date\":true,\"weather\":true,\"moon\":true,"
+    "\"stock\":false,\"github\":false}}");
+  Settings out; AddedKeys added; JsonDocument inv;
+  settingsLoad(makeDefaults(), file.as<JsonVariantConst>(), out, added, inv.to<JsonObject>());
+  TEST_ASSERT_EQUAL(0, inv.size());
+  const char *expected[] = {"bridge_url", "bridge_key", "page_secs", "auto_page", "clock_format",
+                            "night_from", "night_to", "night_level", "pages.ha", "pages.now", "pages.cal"};
+  for (const char *k : expected) TEST_ASSERT_TRUE_MESSAGE(hasAdded(added, k), k);
+  TEST_ASSERT_EQUAL(11, added.count);
+  TEST_ASSERT_EQUAL(8, out.pageSecs);
+  TEST_ASSERT_EQUAL_STRING("GMT0BST,M3.5.0/1,M10.5.0", out.tzRule);
+}
+
+static void test_merge_bridge_url_rules() {
+  const char *good[] = {"", "http://192.168.86.48:8787", "https://cal-mini.local:8443/bridge",
+                        "http://cal-mini.local/bridge/"};
+  for (const char *v : good) {
+    JsonDocument patch; patch.to<JsonObject>()["bridge_url"] = v;
+    Settings out; JsonDocument errs;
+    TEST_ASSERT_TRUE_MESSAGE(settingsMerge(makeDefaults(), patch.as<JsonVariantConst>(), out,
+                                           errs.to<JsonObject>()), v);
+    TEST_ASSERT_EQUAL_STRING(v, out.bridgeUrl);
+  }
+  const char *bad[] = {"192.168.86.48:8787", "ftp://x", "http://", "http:///x", "http://a b",
+                       "http://h/api?x=1", "http://user:pw@host", "http://h/#frag",
+                       "http://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com"};
+  for (const char *v : bad) {
+    JsonDocument patch; patch.to<JsonObject>()["bridge_url"] = v;
+    Settings out; JsonDocument errs;
+    TEST_ASSERT_FALSE_MESSAGE(settingsMerge(makeDefaults(), patch.as<JsonVariantConst>(), out,
+                                            errs.to<JsonObject>()), v);
+    TEST_ASSERT_FALSE(errs["bridge_url"].isNull());
+  }
+}
+
+static void test_merge_new_number_and_choice_ranges() {
+  JsonDocument ok;
+  deserializeJson(ok, "{\"page_secs\":3,\"night_from\":-1,\"night_to\":23,\"night_level\":100,"
+                      "\"clock_format\":\"12h\",\"auto_page\":false}");
+  Settings out; JsonDocument errs;
+  TEST_ASSERT_TRUE(settingsMerge(makeDefaults(), ok.as<JsonVariantConst>(), out, errs.to<JsonObject>()));
+  TEST_ASSERT_EQUAL(3, out.pageSecs);
+  TEST_ASSERT_EQUAL(-1, out.nightFrom);
+  TEST_ASSERT_TRUE(out.clock12h);
+  TEST_ASSERT_FALSE(out.autoPage);
+
+  JsonDocument bad;
+  deserializeJson(bad, "{\"page_secs\":2,\"night_from\":24,\"night_to\":-1,\"night_level\":101,"
+                       "\"clock_format\":\"am\",\"auto_page\":\"yes\",\"bridge_key\":\"a b\"}");
+  JsonDocument errs2;
+  TEST_ASSERT_FALSE(settingsMerge(makeDefaults(), bad.as<JsonVariantConst>(), out, errs2.to<JsonObject>()));
+  const char *keys[] = {"page_secs", "night_from", "night_to", "night_level", "clock_format",
+                        "auto_page", "bridge_key"};
+  for (const char *k : keys) TEST_ASSERT_FALSE_MESSAGE(errs2[k].isNull(), k);
+
+  JsonDocument fraction;
+  deserializeJson(fraction, "{\"page_secs\":7.5}");
+  JsonDocument errs3;
+  TEST_ASSERT_FALSE(settingsMerge(makeDefaults(), fraction.as<JsonVariantConst>(), out, errs3.to<JsonObject>()));
+}
+
 // ── Round trip ────────────────────────────────────────────
 
 static void test_round_trip_through_json() {
   Settings s = makeDefaults();
   s.mountRight = true; s.theme = 0; s.windMph = true; s.pages[3] = false;
   strcpy(s.tzRule, "EST5EDT,M3.2.0,M11.1.0");
+  strcpy(s.bridgeUrl, "http://10.0.0.2:8787"); s.pages[8] = false;
+  s.pageSecs = 30; s.clock12h = true; s.nightFrom = 23; s.nightTo = 7; s.nightLevel = 5;
   JsonDocument file;
   deserializeJson(file, dump(s));
   Settings out; AddedKeys added; JsonDocument inv;
@@ -369,6 +462,9 @@ int main(int, char **) {
   RUN_TEST(test_merge_rejects_nan_inf_and_out_of_range_coordinates);
   RUN_TEST(test_merge_accepts_etc_gmt_tz_name);
   RUN_TEST(test_merge_rejects_url_breaking_characters);
+  RUN_TEST(test_load_v1_file_reports_every_new_key);
+  RUN_TEST(test_merge_bridge_url_rules);
+  RUN_TEST(test_merge_new_number_and_choice_ranges);
   RUN_TEST(test_round_trip_through_json);
   RUN_TEST(test_wifi_valid);
   RUN_TEST(test_wifi_open_network);

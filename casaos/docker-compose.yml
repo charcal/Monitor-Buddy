@@ -1,0 +1,57 @@
+# Monitor Buddy on CasaOS: the web flasher (HTTPS), the firmware mirror, and
+# buddy-bridge for the Home, Now playing and Calendar pages.
+#
+#   cp .env.example .env      # then fill it in
+#   docker compose up -d --build
+#
+# CasaOS lists the three containers on its dashboard once they run.
+
+name: monitor-buddy
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "${FLASHER_PORT:-8443}:${FLASHER_PORT:-8443}"
+      - "${CERT_PORT:-8780}:${CERT_PORT:-8780}"
+    environment:
+      FLASHER_HOST: ${FLASHER_HOST:-cal-mini.local}
+      FLASHER_IP: ${FLASHER_IP:-192.168.86.48}
+      FLASHER_PORT: ${FLASHER_PORT:-8443}
+      CERT_PORT: ${CERT_PORT:-8780}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${APPDATA:-/DATA/AppData/monitor-buddy}/site:/site:ro
+      - ${APPDATA:-/DATA/AppData/monitor-buddy}/caddy-data:/data
+      - ${APPDATA:-/DATA/AppData/monitor-buddy}/caddy-config:/config
+    depends_on:
+      - bridge
+      - sync
+
+  sync:
+    build: ./sync
+    image: monitor-buddy-sync:local
+    restart: unless-stopped
+    environment:
+      GITHUB_REPO: ${GITHUB_REPO:?set GITHUB_REPO in .env to your fork, owner/Monitor-Buddy}
+      FLASHER_REF: ${FLASHER_REF:-main}
+      SYNC_MINUTES: ${SYNC_MINUTES:-30}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      BRIDGE_DEVICE_URL: http://${FLASHER_IP:-192.168.86.48}:${BRIDGE_PORT:-8787}
+    volumes:
+      - ${APPDATA:-/DATA/AppData/monitor-buddy}/site:/site
+
+  bridge:
+    build: ../bridge
+    image: monitor-buddy-bridge:local
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Where Spotify sends you back after signing in (through Caddy, over HTTPS).
+      PUBLIC_URL: https://${FLASHER_HOST:-cal-mini.local}:${FLASHER_PORT:-8443}/bridge
+    ports:
+      # The Buddy talks to the bridge here, over plain HTTP on your LAN.
+      - "${BRIDGE_PORT:-8787}:8787"
+    volumes:
+      - ${APPDATA:-/DATA/AppData/monitor-buddy}/bridge:/data

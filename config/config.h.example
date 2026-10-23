@@ -96,3 +96,30 @@
 #define SHOW_MOON     true   // moon phase
 #define SHOW_STOCK    true   // stock ticker (needs Wi-Fi + Finnhub key)
 #define SHOW_GITHUB   true   // GitHub follower/repo stats (needs Wi-Fi)
+#define SHOW_HA       true   // Home Assistant values (needs BRIDGE_URL)
+#define SHOW_NOW      true   // now playing on Plex/Jellyfin/Spotify (needs BRIDGE_URL)
+#define SHOW_CAL      true   // next calendar events (needs BRIDGE_URL)
+
+// ── Home server bridge ──────────────────────────────────────
+// The Home, Now playing and Calendar pages come from buddy-bridge, a small
+// service on your home server (see bridge/ and casaos/ in this repo).
+// BRIDGE_URL  e.g. "http://192.168.86.48:8787". Use the IP address: the
+//             Buddy can't look up .local names. Leave "" to hide the pages.
+// BRIDGE_KEY  The bridge's BUDDY_KEY, if you set one. "" sends none.
+#define BRIDGE_URL  ""
+#define BRIDGE_KEY  ""
+
+// ── Behaviour ───────────────────────────────────────────────
+// PAGE_SECS     Seconds each page shows before moving on (3-120).
+// AUTO_PAGE     Auto-advance at start-up. A double tap still toggles it.
+// CLOCK_FORMAT  "24h" or "12h".
+// NIGHT_FROM / NIGHT_TO  Dim the screen between these hours (0-23).
+//               NIGHT_FROM -1 turns night dimming off.
+// NIGHT_LEVEL   Night brightness as a percentage of your normal level
+//               (0 turns the backlight off; a touch wakes it for 30 s).
+#define PAGE_SECS     8
+#define AUTO_PAGE     true
+#define CLOCK_FORMAT  "24h"
+#define NIGHT_FROM    -1
+#define NIGHT_TO      7
+#define NIGHT_LEVEL   20

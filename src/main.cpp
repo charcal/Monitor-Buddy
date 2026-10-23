@@ -2,7 +2,8 @@
 // Monitor-Buddy — Waveshare ESP32-C6-Touch-LCD-1.47
 // by IdefixRC - https://github.com/IdefixRC
 // Features: animated faces, clock, date, weather, moon,
-//           stock ticker, GitHub stats.  
+//           stock ticker, GitHub stats; Home Assistant, now
+//           playing and calendar pages via buddy-bridge.
 //           5 different themes available,
 //           Enable/Disable pages to customize your Buddy
 //           Touch swipe to change pages, 
@@ -95,6 +96,7 @@
 #include <esp_system.h>
 #include <math.h>
 #include <string.h>
+#include <memory>
 
 #include <LittleFS.h>
 #include <AyresWiFiManager.h>
@@ -142,6 +144,42 @@
 // means "build a fixed rule from TZ_OFFSET_HOURS".
 #ifndef TZ_RULE
   #define TZ_RULE ""
+#endif
+
+// Settings added with the bridge pages (config version 2). Older config.h
+// copies don't have them, so they fall back to these values.
+#ifndef SHOW_HA
+  #define SHOW_HA true
+#endif
+#ifndef SHOW_NOW
+  #define SHOW_NOW true
+#endif
+#ifndef SHOW_CAL
+  #define SHOW_CAL true
+#endif
+#ifndef BRIDGE_URL
+  #define BRIDGE_URL ""
+#endif
+#ifndef BRIDGE_KEY
+  #define BRIDGE_KEY ""
+#endif
+#ifndef PAGE_SECS
+  #define PAGE_SECS 8
+#endif
+#ifndef AUTO_PAGE
+  #define AUTO_PAGE true
+#endif
+#ifndef CLOCK_FORMAT
+  #define CLOCK_FORMAT "24h"
+#endif
+#ifndef NIGHT_FROM
+  #define NIGHT_FROM -1
+#endif
+#ifndef NIGHT_TO
+  #define NIGHT_TO 7
+#endif
+#ifndef NIGHT_LEVEL
+  #define NIGHT_LEVEL 20
 #endif
 
 // OTHER CONFIGURATION ----> EDIT ONLY IF NECESSARY
@@ -213,11 +251,21 @@ static constexpr uint32_t FETCH_RETRY_MS               = 60000UL;
 static constexpr uint32_t GITHUB_RETRY_MAX_MS          = 120000UL;
 static constexpr uint32_t WEATHER_REFRESH_INTERVAL_MS = 15UL * 60UL * 1000UL;
 static constexpr uint32_t GITHUB_REFRESH_INTERVAL_MS  = 30UL * 60UL * 1000UL;
+// Bridge pages: faster while the page is on screen, slower in the background
+// so a swipe to the page already has something to show.
+static constexpr uint32_t HA_REFRESH_SHOWN_MS   = 20UL * 1000UL;
+static constexpr uint32_t HA_REFRESH_BG_MS      = 2UL * 60UL * 1000UL;
+static constexpr uint32_t NOW_REFRESH_SHOWN_MS  = 5UL * 1000UL;
+static constexpr uint32_t NOW_REFRESH_BG_MS     = 60UL * 1000UL;
+static constexpr uint32_t CAL_REFRESH_MS        = 5UL * 60UL * 1000UL;
+// A touch while the backlight is off at night wakes it for this long.
+static constexpr uint32_t NIGHT_WAKE_MS         = 30UL * 1000UL;
 
 // Background fetch task. Stack sized from the measured high-water mark: an
 // HTTPS fetch used about 3.3 KB of the original 12 KB, plus a 3 KB margin.
 // If "[net] ... stack free" ever drops below 2048 bytes, raise this.
-static constexpr uint32_t    NET_TASK_STACK_BYTES = 7168;
+// The bridge fetches added ~0.5 KB of locals (CalData, HTTPClient), hence 8 KB.
+static constexpr uint32_t    NET_TASK_STACK_BYTES = 8192;
 static constexpr UBaseType_t NET_TASK_PRIORITY    = 1;     // same as loop()
 static constexpr uint32_t    NET_HEALTH_LOG_MS    = 5UL * 60UL * 1000UL;
 
@@ -294,6 +342,16 @@ void buildPageList();
 bool wifiConfigured();
 bool githubConfigured();
 bool stockConfigured();
+bool bridgeConfigured();
+bool fetchHa();
+bool fetchNow();
+bool fetchCal();
+void drawHa();
+void drawNow();
+void drawCal();
+uint32_t pageIntervalMs();
+void applyBacklight();
+bool nightNow();
 bool ensureWifi();
 void syncNTP();
 void drawWeatherIcon(int cx, int cy, int code, bool isDay, uint16_t color);
@@ -578,7 +636,7 @@ bool bsp_touch_get_coordinates(uint16_t *outX, uint16_t *outY) {
 
 static const int SCREEN_W         = 320;
 static const int SCREEN_H         = 172;
-static const uint8_t APP_COUNT    = 7;   // total number of pages defined
+static const uint8_t APP_COUNT    = 10;  // total number of pages defined
 
 // Page identifiers, in fixed display order. These index the render switch in
 // loop(); which are actually shown is decided by settings.pages.
@@ -589,6 +647,9 @@ static constexpr uint8_t PAGE_WEATHER = 3;
 static constexpr uint8_t PAGE_MOON    = 4;
 static constexpr uint8_t PAGE_STOCK   = 5;
 static constexpr uint8_t PAGE_GITHUB  = 6;
+static constexpr uint8_t PAGE_HA      = 7;   // Home Assistant values, from the bridge
+static constexpr uint8_t PAGE_NOW     = 8;   // now playing, from the bridge
+static constexpr uint8_t PAGE_CAL     = 9;   // next calendar events, from the bridge
 
 // -- Face expressions (ported from DESKBUDDY-1.0, Edison Science Corner) --
 // 9 moods, cycled by single-tapping the face page. A fast spin of the board
@@ -623,7 +684,8 @@ bool settingsStored = false;   // booted from a readable /config.json; GET "stor
 
 static_assert(PAGE_FACE == 0 && PAGE_CLOCK == 1 && PAGE_DATE == 2 &&
               PAGE_WEATHER == 3 && PAGE_MOON == 4 && PAGE_STOCK == 5 &&
-              PAGE_GITHUB == 6, "settings.pages[] is indexed by PAGE_* ids");
+              PAGE_GITHUB == 6 && PAGE_HA == 7 && PAGE_NOW == 8 && PAGE_CAL == 9,
+              "settings.pages[] is indexed by PAGE_* ids");
 static_assert(SETTINGS_PAGE_COUNT == APP_COUNT,
               "settings.pages[] needs one entry per page");
 
@@ -669,6 +731,8 @@ uint32_t blinkUntil      = 0;
 uint32_t nextGlance      = 900;
 uint32_t nextAutoPage    = PAGE_AUTO_INTERVAL_MS;
 uint8_t  brightnessLevel = BRIGHTNESS_DEFAULT;
+int16_t  backlightWritten = -1;   // last level sent to the backlight, -1 = none yet
+uint32_t nightWakeUntil   = 0;    // a touch at night lights the screen until then
 uint32_t brightnessBannerUntil = 0;
 uint8_t  savedBrightness       = BRIGHTNESS_DEFAULT;  // level in /display.json
 bool     brightnessSavePending = false;
@@ -698,7 +762,17 @@ float pressPulse   = 0.0f;
 struct WeatherData { bool valid; int temp, humidity, wind, code; bool isDay; uint32_t updatedAt; };
 struct StockData   { bool valid; float price, open, high, low;   uint32_t updatedAt; };
 struct GithubData  { bool valid; int followers, repos;            uint32_t updatedAt; };
-struct NetData     { WeatherData weather; StockData stock; GithubData github; };
+// Bridge pages. The bridge sends upper-case ASCII already cut to fit; the
+// sizes here are a second limit, not the layout's.
+struct HaItem      { char label[16]; char value[12]; char unit[6]; };
+struct HaData      { bool valid, setup; uint8_t count; HaItem items[3]; uint32_t updatedAt; };
+struct NowData     { bool valid, playing, paused; char source[10]; char title[44]; char artist[44];
+                     uint32_t positionS, durationS; uint32_t updatedAt; };
+struct CalEvent    { char title[44]; char label[22]; char day[10]; char time[9];
+                     int64_t start, end; bool allDay; };
+struct CalData     { bool valid, setup; uint8_t count; CalEvent events[3]; uint32_t updatedAt; };
+struct NetData     { WeatherData weather; StockData stock; GithubData github;
+                     HaData ha; NowData now; CalData cal; };
 
 NetData           netShared = {};
 NetData           netView   = {};
@@ -973,6 +1047,7 @@ void buildPageList() {
     if (!settings.pages[i]) continue;
     if (i == PAGE_GITHUB && !githubConfigured()) continue;  // "" hides the page
     if (i == PAGE_STOCK && !stockConfigured()) continue;    // no key hides the page
+    if ((i == PAGE_HA || i == PAGE_NOW || i == PAGE_CAL) && !bridgeConfigured()) continue;
     pageOrder[pageCount++] = i;
   }
   if (pageCount == 0) pageOrder[pageCount++] = PAGE_FACE;  // never leave it empty
@@ -986,7 +1061,12 @@ void switchApp(int8_t delta) {
   currentPageIdx = (currentPageIdx + pageCount + delta) % pageCount;
   currentApp = pageOrder[currentPageIdx];
   pressPulse = 1.0f;
-  nextAutoPage = millis() + PAGE_AUTO_INTERVAL_MS;
+  nextAutoPage = millis() + pageIntervalMs();
+}
+
+// settings.pageSecs, the auto-advance interval.
+uint32_t pageIntervalMs() {
+  return (uint32_t)(settings.pageSecs ? settings.pageSecs : PAGE_AUTO_INTERVAL_MS / 1000UL) * 1000UL;
 }
 
 // ── Wi-Fi ─────────────────────────────────────────────────
@@ -999,6 +1079,7 @@ void switchApp(int8_t delta) {
 bool wifiConfigured() { return wifiManager.tieneCredenciales(); }
 bool githubConfigured() { return settings.githubUser[0] != '\0'; }
 bool stockConfigured() { return settings.stockKey[0] != '\0'; }
+bool bridgeConfigured() { return settings.bridgeUrl[0] != '\0'; }
 
 // Network fetches call this before doing anything. It is a pure status
 // check — AWM owns connecting and reconnecting. It refuses while the captive
@@ -1225,6 +1306,117 @@ bool fetchGithub() {
   g.updatedAt = millis();
   g.valid     = true;
   publishNetData(netShared.github, g);
+  return true;
+}
+
+// ── Bridge fetches (buddy-bridge on the home server) ──────
+// The bridge does the heavy work (Home Assistant, Plex/Jellyfin/Spotify,
+// calendar feeds) and answers with small JSON. Plain HTTP on the LAN is the
+// normal case; HTTPS works too, without certificate checks, since the bridge
+// is your own server. The key goes in a header, never in the URL or the log.
+
+// Copies text for the 5x7 font: anything outside printable ASCII becomes '?'.
+static void copyText(char *dst, size_t size, const char *src) {
+  size_t i = 0;
+  for (; src && src[i] && i < size - 1; i++) {
+    char c = src[i];
+    dst[i] = (c >= 32 && c <= 126) ? c : '?';
+  }
+  dst[i] = '\0';
+}
+
+// GET <bridge_url><path> into doc. False on any network, HTTP or JSON failure.
+bool bridgeGet(const char *path, JsonDocument &doc) {
+  if (!bridgeConfigured() || !ensureWifi()) return false;
+  String url = settings.bridgeUrl;
+  while (url.endsWith("/")) url.remove(url.length() - 1);
+  url += path;
+  // Declared before http, so it is destroyed after it: http may still touch
+  // its client while it is torn down.
+  std::unique_ptr<WiFiClientSecure> secure;
+  HTTPClient http;
+  http.setTimeout(HTTP_TIMEOUT_MS);
+  http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
+  bool began;
+  if (url.startsWith("https://")) {
+    secure.reset(new WiFiClientSecure);
+    secure->setInsecure();
+    secure->setHandshakeTimeout(TLS_HANDSHAKE_TIMEOUT_S);
+    began = http.begin(*secure, url);
+  } else {
+    began = http.begin(url);
+  }
+  if (!began) return false;
+  if (settings.bridgeKey[0]) http.addHeader("X-Buddy-Key", settings.bridgeKey);
+  if (http.GET() != HTTP_CODE_OK) { http.end(); return false; }
+  DeserializationError err = deserializeJson(doc, http.getString());
+  http.end();
+  return !err && doc.is<JsonObject>();
+}
+
+// The bridge answers {"ok":false,"setup":false} when that page isn't set up
+// on the bridge yet. That is a real answer (the page says so), not a failure.
+static bool bridgeNotSetUp(JsonDocument &doc) {
+  return !(doc["ok"] | false) && doc["setup"].is<bool>() && !doc["setup"].as<bool>();
+}
+
+bool fetchHa() {
+  JsonDocument doc;
+  if (!bridgeGet("/api/ha", doc)) return false;
+  HaData h = {};
+  h.setup = !bridgeNotSetUp(doc);
+  if (h.setup && !(doc["ok"] | false)) return false;
+  for (JsonObjectConst item : doc["items"].as<JsonArrayConst>()) {
+    if (h.count >= 3) break;
+    HaItem &it = h.items[h.count++];
+    copyText(it.label, sizeof(it.label), item["label"] | "");
+    copyText(it.value, sizeof(it.value), item["value"] | "--");
+    copyText(it.unit,  sizeof(it.unit),  item["unit"] | "");
+  }
+  h.updatedAt = millis();
+  h.valid     = true;
+  publishNetData(netShared.ha, h);
+  return true;
+}
+
+bool fetchNow() {
+  JsonDocument doc;
+  if (!bridgeGet("/api/now", doc)) return false;
+  if (!(doc["ok"] | false)) return false;
+  NowData n = {};
+  n.playing   = doc["playing"] | false;
+  n.paused    = doc["paused"] | false;
+  copyText(n.source, sizeof(n.source), doc["source"] | "");
+  copyText(n.title,  sizeof(n.title),  doc["title"] | "");
+  copyText(n.artist, sizeof(n.artist), doc["artist"] | "");
+  n.positionS = doc["position_s"] | 0;
+  n.durationS = doc["duration_s"] | 0;
+  n.updatedAt = millis();
+  n.valid     = true;
+  publishNetData(netShared.now, n);
+  return true;
+}
+
+bool fetchCal() {
+  JsonDocument doc;
+  if (!bridgeGet(settings.clock12h ? "/api/cal?fmt=12" : "/api/cal", doc)) return false;
+  CalData c = {};
+  c.setup = !bridgeNotSetUp(doc);
+  if (c.setup && !(doc["ok"] | false)) return false;
+  for (JsonObjectConst ev : doc["events"].as<JsonArrayConst>()) {
+    if (c.count >= 3) break;
+    CalEvent &e = c.events[c.count++];
+    copyText(e.title, sizeof(e.title), ev["title"] | "");
+    copyText(e.label, sizeof(e.label), ev["label"] | "");
+    copyText(e.day,   sizeof(e.day),   ev["day"] | "");
+    copyText(e.time,  sizeof(e.time),  ev["time"] | "");
+    e.start  = ev["start"] | (int64_t)0;
+    e.end    = ev["end"] | (int64_t)0;
+    e.allDay = ev["all_day"] | false;
+  }
+  c.updatedAt = millis();
+  c.valid     = true;
+  publishNetData(netShared.cal, c);
   return true;
 }
 
@@ -1616,8 +1808,15 @@ void drawClock() {
   uint8_t hh = sod/3600UL, mm = (sod/60UL)%60UL, ss = sod%60UL;
   gfx->fillScreen(BG);
   const int W = 54, H = 100, T = 10, Y = 18;   // bigger 7-seg digits
+  // 12-hour clock: 1-12 without a leading zero, AM/PM above the seconds.
+  if (settings.clock12h) {
+    gfx->setTextSize(2); gfx->setTextColor(COL_SEC);
+    gfx->setCursor(284, Y + 4);
+    gfx->print(hh < 12 ? "AM" : "PM");
+    hh = hh % 12 == 0 ? 12 : hh % 12;
+  }
   // HH:MM shifted left to make room for the seconds after the minutes.
-  drawDigit(8,   Y, hh/10, W, H, T, COL_TIME);
+  if (!settings.clock12h || hh >= 10) drawDigit(8, Y, hh/10, W, H, T, COL_TIME);
   drawDigit(70,  Y, hh%10, W, H, T, COL_TIME);
   if ((ss%2)==0) {
     gfx->fillRoundRect(134, Y+28, 11, 11, 5, COL_TIME);
@@ -1820,6 +2019,228 @@ void drawGithub() {
   drawPageDots();
 }
 
+// ── Text helpers for the bridge pages ─────────────────────
+
+static int textW(const char *s, uint8_t size) { return (int)strlen(s) * 6 * size; }
+
+static void textAt(const char *s, int x, int y, uint8_t size, uint16_t color) {
+  gfx->setTextSize(size); gfx->setTextColor(color);
+  gfx->setCursor(x, y); gfx->print(s);
+}
+
+// The largest size from maxSize down that fits `width`, at least 1.
+static uint8_t fitSize(const char *s, int width, uint8_t maxSize) {
+  uint8_t sz = maxSize;
+  while (sz > 1 && textW(s, sz) > width) sz--;
+  return sz;
+}
+
+// Text in the box x..x+w: drawn as is when it fits, otherwise it waits a
+// moment and then scrolls left in a loop. The margins either side of the box
+// are cleared again, so the scrolling text never runs past it.
+static void marqueeText(const char *s, int x, int y, int w, uint8_t size, uint16_t color) {
+  int tw = textW(s, size);
+  if (tw <= w) { textAt(s, x, y, size, color); return; }
+  const int gap = 48;
+  const uint32_t holdMs = 1500, msPerPx = 28;
+  uint32_t period = holdMs + (uint32_t)(tw + gap) * msPerPx;
+  uint32_t t = millis() % period;
+  int off = t < holdMs ? 0 : (int)((t - holdMs) / msPerPx);
+  textAt(s, x - off, y, size, color);
+  textAt(s, x - off + tw + gap, y, size, color);
+  int h = 8 * size;
+  gfx->fillRect(0, y, x, h, BG);
+  gfx->fillRect(x + w, y, SCREEN_W - x - w, h, BG);
+}
+
+// Copies at most `chars` characters of s into out (size >= chars + 1).
+static void truncTo(char *out, size_t size, const char *s, int chars) {
+  if (chars < 0) chars = 0;
+  size_t n = strlen(s);
+  if ((int)n > chars) n = (size_t)chars;
+  if (n > size - 1) n = size - 1;
+  memcpy(out, s, n);
+  out[n] = '\0';
+}
+
+// The panel shown on a bridge page that can't show data. True when it drew.
+static bool drawBridgeGate(bool valid, bool setup, const char *what) {
+  if (!bridgeConfigured()) {
+    centeredText("NO BRIDGE", 52, 3);
+    centeredTextColor("SET THE BRIDGE URL", 98, 2, COL_LABEL);
+    drawPageDots(); return true;
+  }
+  if (drawWifiGate()) return true;
+  if (!valid) { centeredText("UPDATING", 74, 3); drawPageDots(); return true; }
+  if (!setup) {
+    centeredFit(what, 52, 3);
+    centeredTextColor("SET IT UP ON THE BRIDGE", 98, 2, COL_LABEL);
+    drawPageDots(); return true;
+  }
+  return false;
+}
+
+// ── Home page (Home Assistant values) ─────────────────────
+
+void drawHa() {
+  gfx->fillScreen(BG);
+  const HaData &h = netView.ha;
+  if (drawBridgeGate(h.valid, h.setup, "HOME ASSISTANT")) return;
+  if (h.count == 0) { centeredText("NO VALUES", 66, 3); drawPageDots(); return; }
+
+  if (h.count == 1) {
+    // One value: the label above, the value as big as it will go.
+    const HaItem &it = h.items[0];
+    centeredTextColor(it.label, 16, 2, COL_LABEL);
+    uint8_t vs = fitSize(it.value, SCREEN_W - 28 - (it.unit[0] ? textW(it.unit, 3) + 6 : 0), 8);
+    int vw = textW(it.value, vs), uw = it.unit[0] ? textW(it.unit, 3) + 6 : 0;
+    int x = (SCREEN_W - vw - uw) / 2, y = 44 + (8 - vs) * 4;
+    textAt(it.value, x, y, vs, COL_GHNUM);
+    if (it.unit[0]) textAt(it.unit, x + vw + 6, y + 8 * vs - 24, 3, COL_LABEL);
+    drawPageDots();
+    return;
+  }
+
+  // Two or three rows: label on the left, value (and unit) on the right.
+  const int top = 6, area = 146, rowH = area / h.count;
+  const uint8_t vsMax = h.count == 2 ? 5 : 4;
+  for (uint8_t i = 0; i < h.count; i++) {
+    const HaItem &it = h.items[i];
+    int uw = it.unit[0] ? textW(it.unit, 2) + 4 : 0;
+    uint8_t vs = fitSize(it.value, 150 - uw, vsMax);
+    int vw = textW(it.value, vs);
+    int rowY = top + i * rowH;
+    int vy = rowY + (rowH - 8 * vs) / 2;
+    int vx = SCREEN_W - 14 - vw - uw;
+    textAt(it.value, vx, vy, vs, COL_GHNUM);
+    if (uw) textAt(it.unit, vx + vw + 4, vy + 8 * vs - 16, 2, COL_LABEL);
+    char lab[16];
+    truncTo(lab, sizeof(lab), it.label, (vx - 10 - 14) / 12);
+    textAt(lab, 14, rowY + (rowH - 16) / 2, 2, COL_VALUE);
+    if (i + 1 < h.count) gfx->drawFastHLine(14, rowY + rowH, SCREEN_W - 28, rgb(40, 40, 40));
+  }
+  drawPageDots();
+}
+
+// ── Now playing page ──────────────────────────────────────
+
+static void mmss(char *out, size_t size, uint32_t s) {
+  if (s >= 3600) snprintf(out, size, "%lu:%02lu:%02lu", (unsigned long)(s / 3600),
+                          (unsigned long)(s / 60 % 60), (unsigned long)(s % 60));
+  else snprintf(out, size, "%lu:%02lu", (unsigned long)(s / 60), (unsigned long)(s % 60));
+}
+
+void drawNow() {
+  gfx->fillScreen(BG);
+  const NowData &n = netView.now;
+  if (drawBridgeGate(n.valid, true, "")) return;
+  if (!n.playing && !n.paused) {
+    centeredTextColor("NOTHING PLAYING", 62, 3, COL_LABEL);
+    drawPageDots();
+    return;
+  }
+  // Source and a play or pause mark along the top.
+  textAt(n.source, 14, 12, 2, COL_DATE_WD);
+  if (n.paused) {
+    gfx->fillRect(290, 10, 5, 18, COL_SEC);
+    gfx->fillRect(299, 10, 5, 18, COL_SEC);
+  } else {
+    gfx->fillTriangle(290, 10, 290, 28, 305, 19, COL_SEC);
+  }
+  marqueeText(n.title[0] ? n.title : "UNKNOWN", 14, 42, SCREEN_W - 28, 3, COL_VALUE);
+  marqueeText(n.artist, 14, 78, SCREEN_W - 28, 2, COL_LABEL);
+
+  // Position moves on between fetches while it plays.
+  uint32_t pos = n.positionS;
+  if (n.playing) pos += (millis() - n.updatedAt) / 1000UL;
+  if (n.durationS && pos > n.durationS) pos = n.durationS;
+  if (n.durationS) {
+    const int bx = 14, by = 108, bw = SCREEN_W - 28, bh = 6;
+    gfx->fillRoundRect(bx, by, bw, bh, 3, rgb(55, 55, 55));
+    int fw = (int)((uint64_t)bw * pos / n.durationS);
+    if (fw > 0) gfx->fillRoundRect(bx, by, fw < bh ? bh : fw, bh, 3, COL_SEC);
+    char a[12], b[13];
+    mmss(a, sizeof(a), pos);
+    b[0] = '-';
+    mmss(b + 1, sizeof(b) - 1, n.durationS - pos);
+    textAt(a, 14, 124, 2, COL_LABEL);
+    textAt(b, SCREEN_W - 14 - textW(b, 2), 124, 2, COL_LABEL);
+  }
+  drawPageDots();
+}
+
+// ── Calendar page ─────────────────────────────────────────
+
+// "12:30" or "12:30PM" for an epoch, in the Buddy's time zone.
+static void localClock(char *out, size_t size, int64_t epoch) {
+  time_t t = (time_t)epoch;
+  struct tm lt;
+  localtime_r(&t, &lt);
+  if (settings.clock12h)
+    snprintf(out, size, "%d:%02d%s", lt.tm_hour % 12 ? lt.tm_hour % 12 : 12, lt.tm_min,
+             lt.tm_hour < 12 ? "AM" : "PM");
+  else
+    snprintf(out, size, "%02d:%02d", lt.tm_hour, lt.tm_min);
+}
+
+// The first event's heading: a countdown when it's close (only once the clock
+// is synced), else the bridge's label such as "TOMORROW 09:30".
+static void calHeading(char *out, size_t size, const CalEvent &e) {
+  if (ntpSynced && !e.allDay) {
+    int64_t now = (int64_t)time(nullptr);
+    if (e.start <= now && now < e.end) {
+      char until[9];
+      localClock(until, sizeof(until), e.end);
+      snprintf(out, size, "NOW UNTIL %s", until);
+      return;
+    }
+    int64_t mins = (e.start - now + 59) / 60;
+    if (mins > 0 && mins <= 60) { snprintf(out, size, "IN %d MIN", (int)mins); return; }
+  }
+  copyText(out, size, e.label);
+}
+
+void drawCal() {
+  gfx->fillScreen(BG);
+  const CalData &c = netView.cal;
+  if (drawBridgeGate(c.valid, c.setup, "CALENDAR")) return;
+
+  // Drop events that ended since the last fetch.
+  const CalEvent *ev[3];
+  uint8_t n = 0;
+  int64_t now = ntpSynced ? (int64_t)time(nullptr) : 0;
+  for (uint8_t i = 0; i < c.count; i++)
+    if (!ntpSynced || c.events[i].end > now) ev[n++] = &c.events[i];
+
+  if (n == 0) {
+    centeredText("NO EVENTS", 52, 3);
+    centeredTextColor("COMING UP THIS WEEK", 98, 2, COL_LABEL);
+    drawPageDots();
+    return;
+  }
+  char head[28];
+  calHeading(head, sizeof(head), *ev[0]);
+  textAt(head, 14, 12, 2, COL_DATE_WD);
+  marqueeText(ev[0]->title, 14, 38, SCREEN_W - 28, 3, COL_VALUE);
+
+  for (uint8_t i = 1; i < n; i++) {
+    const CalEvent &e = *ev[i];
+    int y = 84 + (i - 1) * 30;
+    // The smaller rows keep the "when" short, so more of the title fits.
+    const char *day = strcmp(e.day, "TOMORROW") == 0 ? "TMRW" : e.day;
+    char when[22];
+    if (e.allDay) copyText(when, sizeof(when), day);
+    else if (strcmp(e.day, "TODAY") == 0) copyText(when, sizeof(when), e.time);
+    else snprintf(when, sizeof(when), "%s %s", day, e.time);
+    textAt(when, 14, y, 2, COL_SEC);
+    int tx = 14 + textW(when, 2) + 12;
+    char title[44];
+    truncTo(title, sizeof(title), e.title, (SCREEN_W - 14 - tx) / 12);
+    textAt(title, tx, y, 2, COL_VALUE);
+  }
+  drawPageDots();
+}
+
 // ── Captive-portal screen ─────────────────────────────────
 // Shown full-screen while AWM's portal is running, so the user can read
 // the AP name/password off the device itself.
@@ -1922,8 +2343,16 @@ Settings defaultsFromConfig() {
   d.tempFahrenheit = TEMP[0] == 'f';
   d.windMph        = strcmp(WIND, "mph") == 0;
   const bool pages[SETTINGS_PAGE_COUNT] = {SHOW_FACE, SHOW_CLOCK, SHOW_DATE,
-      SHOW_WEATHER, SHOW_MOON, SHOW_STOCK, SHOW_GITHUB};
+      SHOW_WEATHER, SHOW_MOON, SHOW_STOCK, SHOW_GITHUB, SHOW_HA, SHOW_NOW, SHOW_CAL};
   memcpy(d.pages, pages, sizeof(pages));
+  strlcpy(d.bridgeUrl, BRIDGE_URL, sizeof(d.bridgeUrl));
+  strlcpy(d.bridgeKey, BRIDGE_KEY, sizeof(d.bridgeKey));
+  d.pageSecs   = (uint8_t)constrain(PAGE_SECS, 3, 120);
+  d.autoPage   = AUTO_PAGE;
+  d.clock12h   = strcmp(CLOCK_FORMAT, "12h") == 0;
+  d.nightFrom  = (int8_t)constrain(NIGHT_FROM, -1, 23);
+  d.nightTo    = (uint8_t)constrain(NIGHT_TO, 0, 23);
+  d.nightLevel = (uint8_t)constrain(NIGHT_LEVEL, 0, 100);
   return d;
 }
 
@@ -1958,6 +2387,10 @@ void loadSettings() {
     Serial.printf("settings: %s not in file, using default\n", settingsAdded.keys[i]);
   Serial.printf("settings: tz %s, stock_key %s\n", settings.tzRule,
                 settings.stockKey[0] ? "set" : "empty");
+  Serial.printf("settings: bridge %s (key %s), pages every %u s, night %d-%u at %u%%\n",
+                settings.bridgeUrl[0] ? settings.bridgeUrl : "none",
+                settings.bridgeKey[0] ? "set" : "empty", (unsigned)settings.pageSecs,
+                (int)settings.nightFrom, (unsigned)settings.nightTo, (unsigned)settings.nightLevel);
 }
 
 // ── Serial settings protocol (the web flasher) ────────────
@@ -2193,9 +2626,36 @@ void loadDisplaySettings() {
   brightnessLevel = (uint8_t)constrain(level, BRIGHTNESS_MINIMUM, 255);
 }
 
+// Night dimming: true between settings.nightFrom and nightTo (wrapping past
+// midnight when from > to). Off until NTP has set the clock, so a Buddy
+// running on its build-time clock never dims at the wrong hour.
+bool nightNow() {
+  if (settings.nightFrom < 0 || !ntpSynced) return false;
+  uint8_t h = currentClockHour(), from = (uint8_t)settings.nightFrom, to = settings.nightTo;
+  if (from == to) return false;
+  return from < to ? (h >= from && h < to) : (h >= from || h < to);
+}
+
+// The level the backlight should have now: the user's brightness, scaled to
+// nightLevel % at night unless a touch woke it. Written only when it changes.
+void applyBacklight() {
+  uint8_t level = brightnessLevel;
+  if (nightNow() && (int32_t)(millis() - nightWakeUntil) >= 0)
+    level = (uint8_t)((uint16_t)brightnessLevel * settings.nightLevel / 100);
+  if (level == backlightWritten) return;
+  backlightWritten = level;
+  ledcWrite(LCD_BL, level);
+}
+
+// True when the screen is dark for the night: a touch should only wake it.
+static bool nightDark() {
+  return nightNow() && settings.nightLevel == 0 && (int32_t)(millis() - nightWakeUntil) >= 0;
+}
+
 void setBrightness(int level) {
   brightnessLevel = (uint8_t)constrain(level, BRIGHTNESS_MINIMUM, 255);
-  ledcWrite(LCD_BL, brightnessLevel);
+  nightWakeUntil  = millis() + NIGHT_WAKE_MS;   // show the change even at night
+  applyBacklight();
   brightnessSavePending = true;           // written by flushBrightnessSave()
   brightnessChangedMs   = millis();
   brightnessBannerUntil = millis() + 1200;
@@ -2220,7 +2680,7 @@ void flushBrightnessSave(bool now) {
 void triggerDoubleTap() {
   autoPageEnabled = !autoPageEnabled;
   autoPageBannerUntil = millis() + 1400;
-  if (autoPageEnabled) nextAutoPage = millis() + PAGE_AUTO_INTERVAL_MS;
+  if (autoPageEnabled) nextAutoPage = millis() + pageIntervalMs();
   Serial.printf("Auto-advance: %s\n", autoPageEnabled ? "ON" : "OFF");
 }
 
@@ -2246,7 +2706,7 @@ void triggerFaceTap() {
   } else {
     switchApp(1);
   }
-  nextAutoPage = millis() + PAGE_AUTO_INTERVAL_MS;
+  nextAutoPage = millis() + pageIntervalMs();
 }
 
 void readSensors() {
@@ -2281,6 +2741,11 @@ void readTouch() {
       touchSwipeDone = false;
       touchWasDown = true;
       touchPortalArmed = true;   // this press is eligible to open the portal
+      // A dark screen at night: this press only wakes it. Marked as a finished
+      // swipe, so it can't also tap, swipe or open the portal.
+      bool wasDark = nightDark();
+      if (nightNow()) nightWakeUntil = now + NIGHT_WAKE_MS;
+      if (wasDark) { touchSwipeDone = true; touchMoved = true; touchPortalArmed = false; }
       return;
     }
     // A page swipe already fired for this press: the rest of the contact is
@@ -2408,8 +2873,13 @@ static void logNetHealth() {
                 (unsigned long)uxTaskGetStackHighWaterMark(nullptr));
 }
 
+// Bridge data older than `ms` (or none yet) is due for a fetch.
+static bool stale(bool valid, uint32_t updatedAt, uint32_t now, uint32_t ms) {
+  return !valid || now - updatedAt >= ms;
+}
+
 void netTask(void *) {
-  FetchPacer weatherPacer, stockPacer, githubPacer;
+  FetchPacer weatherPacer, stockPacer, githubPacer, haPacer, nowPacer, calPacer;
   uint32_t lastHealthLogMs = millis();
   bool tlsHealthLogged = false;
 
@@ -2421,9 +2891,28 @@ void netTask(void *) {
     bool ran = false, usedTls = false;
     // Weather and GitHub are paced by data age after a success (okWaitMs 0),
     // stock by STOCK_REFRESH_MS; all three back off after a failure.
+    const bool bridge = bridgeConfigured();
+    const uint8_t shown = currentApp;
     if (settings.pages[PAGE_STOCK] && stockConfigured() && currentApp == PAGE_STOCK && stockPacer.ready(now)) {
       runFetch("stock", fetchStock, stockPacer, now, STOCK_REFRESH_MS, FETCH_RETRY_MS);
       ran = usedTls = true;
+    } else if (bridge && settings.pages[PAGE_NOW]
+        && stale(netShared.now.valid, netShared.now.updatedAt, now,
+                 shown == PAGE_NOW ? NOW_REFRESH_SHOWN_MS : NOW_REFRESH_BG_MS)
+        && nowPacer.ready(now)) {
+      runFetch("now", fetchNow, nowPacer, now, 0, FETCH_RETRY_MS);
+      ran = true;
+    } else if (bridge && settings.pages[PAGE_HA]
+        && stale(netShared.ha.valid, netShared.ha.updatedAt, now,
+                 shown == PAGE_HA ? HA_REFRESH_SHOWN_MS : HA_REFRESH_BG_MS)
+        && haPacer.ready(now)) {
+      runFetch("ha", fetchHa, haPacer, now, 0, FETCH_RETRY_MS);
+      ran = true;
+    } else if (bridge && settings.pages[PAGE_CAL]
+        && stale(netShared.cal.valid, netShared.cal.updatedAt, now, CAL_REFRESH_MS)
+        && calPacer.ready(now)) {
+      runFetch("cal", fetchCal, calPacer, now, 0, FETCH_RETRY_MS);
+      ran = true;
     } else if (settings.pages[PAGE_WEATHER]
         && (!netShared.weather.valid || now - netShared.weather.updatedAt >= WEATHER_REFRESH_INTERVAL_MS)
         && weatherPacer.ready(now)) {
@@ -2499,6 +2988,7 @@ void setup() {
   display->setRotation(screenRotation);
   ledcAttach(LCD_BL, 5000, 8);
   ledcWrite(LCD_BL, brightnessLevel);
+  gfx->setTextWrap(false);   // long titles scroll (marqueeText); never wrap
   gfx->fillScreen(BG);
   gfx->flush();
 
@@ -2528,7 +3018,8 @@ void setup() {
   seedClockFromCompileTime();
   nextBlink         = millis() + 1200;
   nextGlance        = millis() + 600;
-  nextAutoPage      = millis() + PAGE_AUTO_INTERVAL_MS;
+  autoPageEnabled   = settings.autoPage;
+  nextAutoPage      = millis() + pageIntervalMs();
 
   // ── AyresWiFiManager setup ──────────────────────────────
   // Order matters: all setters first, then begin() (mounts LittleFS and
@@ -2568,7 +3059,7 @@ void setup() {
   wifiManager.begin();   // mounts LittleFS, loads stored credentials
   loadDisplaySettings();
   savedBrightness = brightnessLevel;
-  ledcWrite(LCD_BL, brightnessLevel);
+  applyBacklight();
 
   // Firmware up to 1.0.2 uploaded its own English-only setup pages to
   // LittleFS. AWM serves those in preference to its built-in, multilingual
@@ -2639,6 +3130,7 @@ void loop() {
 
   updateAutoPage();
   updateFaceTimers();
+  applyBacklight();   // night dimming follows the clock
 
   // Retry NTP if Wi-Fi came up after boot, and resync every 6 h to
   // correct drift and to undo any UTC-only resync done by AWM.
@@ -2663,7 +3155,10 @@ void loop() {
     case 3: drawWeather();    break;
     case 4: drawMoon();       break;
     case 5: drawStock();      break;
-    default: drawGithub();    break;
+    case 6: drawGithub();     break;
+    case 7: drawHa();         break;
+    case 8: drawNow();        break;
+    default: drawCal();       break;
   }
   // Brightness or auto-advance feedback banner — shown briefly after a gesture.
   if (millis() < brightnessBannerUntil) {

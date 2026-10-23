@@ -4,16 +4,24 @@ import { ruleForZone, ruleFromOffset } from "./tz.js";
 
 // Top-level settings keys in the firmware's order (lib/settings/settings.cpp).
 const KEY_ORDER = ["mount", "theme", "github_user", "tz_name", "tz_rule", "ticker",
-  "stock_key", "lat", "lon", "temp_unit", "wind_unit", "pages"];
+  "stock_key", "lat", "lon", "temp_unit", "wind_unit", "pages",
+  "bridge_url", "bridge_key", "page_secs", "auto_page", "clock_format",
+  "night_from", "night_to", "night_level"];
+// Added in settings version 2.
+const V2_KEYS = ["bridge_url", "bridge_key", "page_secs", "auto_page", "clock_format",
+  "night_from", "night_to", "night_level"];
 
 const PAGE_DEFINES = {
   SHOW_FACE: "face", SHOW_CLOCK: "clock", SHOW_DATE: "date", SHOW_WEATHER: "weather",
   SHOW_MOON: "moon", SHOW_STOCK: "stock", SHOW_GITHUB: "github",
+  SHOW_HA: "ha", SHOW_NOW: "now", SHOW_CAL: "cal",
 };
 // #define name -> settings key, for the plain one-to-one cases.
 const DIRECT = {
   THEME: "theme", GITHUB_USER: "github_user", TIMEZONE: "tz_name", TICKER: "ticker",
   LAT: "lat", LONG: "lon", TEMP: "temp_unit", WIND: "wind_unit",
+  BRIDGE_URL: "bridge_url", BRIDGE_KEY: "bridge_key", PAGE_SECS: "page_secs", AUTO_PAGE: "auto_page",
+  CLOCK_FORMAT: "clock_format", NIGHT_FROM: "night_from", NIGHT_TO: "night_to", NIGHT_LEVEL: "night_level",
 };
 // Defines that feed another setting rather than mapping to one.
 const HELPERS = ["TZ_RULE", "TZ_OFFSET_HOURS"];
@@ -81,6 +89,8 @@ export function parseConfigH(text, table) {
   if (Object.keys(pages).length) config.pages = pages;
 
   const imported = KEY_ORDER.filter((k) => k in config);
-  const defaulted = KEY_ORDER.filter((k) => !(k in config));
+  // A config.h from before the bridge settings never had them, so their
+  // absence isn't worth reporting; only the older keys are listed.
+  const defaulted = KEY_ORDER.filter((k) => !(k in config) && !V2_KEYS.includes(k));
   return { config, imported, skipped, defaulted };
 }

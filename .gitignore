@@ -16,5 +16,10 @@ compile_commands.json
 # Local config — holds the Finnhub API token. Never commit; see config/config.h.example
 config/config.h
 
+# CasaOS stack settings: Home Assistant, Plex and Spotify tokens. See casaos/.env.example
+casaos/.env
+__pycache__/
+.pytest_cache/
+
 # Local working notes/scratch — never goes to GitHub
 .project/

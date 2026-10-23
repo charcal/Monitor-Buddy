@@ -9,7 +9,7 @@
 // KEEP IN SYNC with src/main.cpp.
 
 import { createFace, bitmapPath, BITMAPS, SCREEN_W, SCREEN_H } from "./face.js";
-import { PAGE_KEYS } from "./settings.js";
+import { PAGE_KEYS, BRIDGE_PAGES } from "./settings.js";
 import { S } from "./strings.js";
 
 const NS = "http://www.w3.org/2000/svg";
@@ -69,6 +69,7 @@ export function pageList(config) {
     if (!pages[key]) return false;
     if (key === "github" && !config.github_user) return false;
     if (key === "stock" && !config.stock_key) return false;
+    if (BRIDGE_PAGES.includes(key) && !config.bridge_url) return false;
     return true;
   });
   return list.length ? list : ["face"];
@@ -99,6 +100,12 @@ const GLYPHS = {
   ":": ".....|.##..|.##..|.....|.##..|.##..|.....", "/": ".....|....#|...#.|..#..|.#...|#....|.....",
   "+": ".....|..#..|..#..|#####|..#..|..#..|.....", "%": "##...|##..#|...#.|..#..|.#...|#..##|...##",
   "$": "..#..|.####|#.#..|.###.|..#.#|####.|..#..",
+  // For titles from the bridge (its text is A-Z, 0-9 and this punctuation).
+  "&": ".##..|#..#.|#.#..|.#...|#.#.#|#..#.|.##.#", "'": "..#..|..#..|.#...|.....|.....|.....|.....",
+  "!": "..#..|..#..|..#..|..#..|..#..|.....|..#..", "?": ".###.|#...#|....#|...#.|..#..|.....|..#..",
+  ",": ".....|.....|.....|.....|.##..|..#..|.#...", "(": "...#.|..#..|.#...|.#...|.#...|..#..|...#.",
+  ")": ".#...|..#..|...#.|...#.|...#.|..#..|.#...", "#": ".#.#.|.#.#.|#####|.#.#.|#####|.#.#.|.#.#.",
+  "=": ".....|.....|#####|.....|#####|.....|.....", ";": ".....|.##..|.##..|.....|.##..|..#..|.#...",
 };
 GLYPHS["—"] = GLYPHS["-"]; // an em dash prints as the font's dash
 
@@ -160,12 +167,18 @@ function digit(x, y, n, w, h, t, color) {
 
 const two = (n) => String(n).padStart(2, "0");
 
-function drawClock(c, now, blinkColon) {
-  const hh = now.getHours();
+function drawClock(c, now, blinkColon, h12 = false) {
+  let hh = now.getHours();
   const mm = now.getMinutes();
   const ss = now.getSeconds();
   const W = 54, H = 100, T = 10, Y = 18;
-  let s = digit(8, Y, Math.floor(hh / 10), W, H, T, c.time) + digit(70, Y, hh % 10, W, H, T, c.time);
+  let s = "";
+  if (h12) {
+    s += txt(hh < 12 ? "AM" : "PM", 284, Y + 4, 2, c.sec);
+    hh = hh % 12 === 0 ? 12 : hh % 12;
+  }
+  if (!h12 || hh >= 10) s += digit(8, Y, Math.floor(hh / 10), W, H, T, c.time);
+  s += digit(70, Y, hh % 10, W, H, T, c.time);
   if (!blinkColon || ss % 2 === 0) {
     s += rrect(134, Y + 28, 11, 11, 5, c.time) + rrect(134, Y + 62, 11, 11, 5, c.time);
   }
@@ -297,6 +310,137 @@ function drawGithub(c, live) {
     + txt("FOLLOWERS", rx, 78, 2, c.label)
     + txt(repos, rx, 110, 3, c.value)
     + txt("REPOS", rx, 140, 1, c.label);
+}
+
+// ── Bridge pages: ports of drawHa, drawNow and drawCal ────
+// Live data comes from the bridge's /api/summary (checkBridge); without it
+// they show the samples below.
+
+const fitSize = (text, width, maxSize) => {
+  let sz = maxSize;
+  while (sz > 1 && textWidth(text, sz) > width) sz--;
+  return sz;
+};
+// marqueeText at its first frame: the start of the text, cut at the box.
+const boxed = (text, x, y, w, size, color) =>
+  txt(String(text).slice(0, Math.floor(w / (6 * size))), x, y, size, color);
+const DIVIDER = "#282828";   // rgb(40,40,40)
+const TRACK = "#373737";     // rgb(55,55,55)
+
+export const SAMPLE_HA = Object.freeze([
+  { label: "LIVING ROOM", value: "21.4", unit: "C" },
+  { label: "HOUSE POWER", value: "412", unit: "W" },
+  { label: "FRONT DOOR", value: "CLOSED", unit: "" },
+]);
+export const SAMPLE_NOW = Object.freeze({ ok: true, playing: true, paused: false, source: "PLEX",
+  title: "TASKMASTER", artist: "SERIES 19 EPISODE 4", position_s: 812, duration_s: 2820 });
+
+function drawHa(c, items) {
+  if (!items.length) return centred("NO VALUES", 66, 3, FG);
+  if (items.length === 1) {
+    const it = items[0];
+    const uw = it.unit ? textWidth(it.unit, 3) + 6 : 0;
+    const vs = fitSize(it.value, SCREEN_W - 28 - uw, 8);
+    const vw = textWidth(it.value, vs);
+    const x = Math.floor((SCREEN_W - vw - uw) / 2), y = 44 + (8 - vs) * 4;
+    return centred(it.label, 16, 2, c.label) + txt(it.value, x, y, vs, c.ghNum)
+      + (it.unit ? txt(it.unit, x + vw + 6, y + 8 * vs - 24, 3, c.label) : "");
+  }
+  const top = 6, rowH = Math.floor(146 / items.length), vsMax = items.length === 2 ? 5 : 4;
+  let s = "";
+  items.forEach((it, i) => {
+    const uw = it.unit ? textWidth(it.unit, 2) + 4 : 0;
+    const vs = fitSize(it.value, 150 - uw, vsMax);
+    const vw = textWidth(it.value, vs);
+    const rowY = top + i * rowH;
+    const vy = rowY + Math.floor((rowH - 8 * vs) / 2);
+    const vx = SCREEN_W - 14 - vw - uw;
+    s += txt(it.value, vx, vy, vs, c.ghNum);
+    if (uw) s += txt(it.unit, vx + vw + 4, vy + 8 * vs - 16, 2, c.label);
+    s += txt(it.label.slice(0, Math.max(0, Math.floor((vx - 24) / 12))), 14, rowY + Math.floor((rowH - 16) / 2), 2, c.value);
+    if (i + 1 < items.length) s += `<rect x="14" y="${rowY + rowH}" width="${SCREEN_W - 28}" height="1" fill="${DIVIDER}"/>`;
+  });
+  return s;
+}
+
+const mmss = (secs) => {
+  const s = Math.max(0, Math.floor(secs));
+  return s >= 3600
+    ? `${Math.floor(s / 3600)}:${two(Math.floor(s / 60) % 60)}:${two(s % 60)}`
+    : `${Math.floor(s / 60)}:${two(s % 60)}`;
+};
+
+function drawNow(c, n) {
+  if (!n.playing && !n.paused) return centred("NOTHING PLAYING", 62, 3, c.label);
+  let s = txt(n.source, 14, 12, 2, c.dateWd);
+  s += n.paused
+    ? `<rect x="290" y="10" width="5" height="18" fill="${c.sec}"/><rect x="299" y="10" width="5" height="18" fill="${c.sec}"/>`
+    : `<path d="M290 10L290 28L305 19Z" fill="${c.sec}"/>`;
+  s += boxed(n.title || "UNKNOWN", 14, 42, SCREEN_W - 28, 3, c.value);
+  s += boxed(n.artist || "", 14, 78, SCREEN_W - 28, 2, c.label);
+  const dur = n.duration_s || 0;
+  const pos = Math.min(n.position_s || 0, dur || Infinity);
+  if (dur) {
+    const bx = 14, by = 108, bw = SCREEN_W - 28, bh = 6;
+    const fw = Math.floor((bw * pos) / dur);
+    s += rrect(bx, by, bw, bh, 3, TRACK);
+    if (fw > 0) s += rrect(bx, by, Math.max(fw, bh), bh, 3, c.sec);
+    const left = mmss(pos), right = `-${mmss(dur - pos)}`;
+    s += txt(left, 14, 124, 2, c.label) + txt(right, SCREEN_W - 14 - textWidth(right, 2), 124, 2, c.label);
+  }
+  return s;
+}
+
+const clockText = (d, h12) => (h12
+  ? `${d.getHours() % 12 || 12}:${two(d.getMinutes())}${d.getHours() < 12 ? "AM" : "PM"}`
+  : `${two(d.getHours())}:${two(d.getMinutes())}`);
+
+// Sample events relative to now, so the times look right in either format.
+export function sampleCal(now, h12) {
+  const at = (days, h, m) => { const d = new Date(now); d.setDate(d.getDate() + days); d.setHours(h, m, 0, 0); return d; };
+  const start = new Date(now.getTime() + 25 * 60000);
+  const ev = (title, s, mins, day, allDay = false) => ({
+    title, day, all_day: allDay, time: allDay ? "" : clockText(s, h12),
+    label: allDay ? `${day} ALL DAY` : `${day} ${clockText(s, h12)}`,
+    start: Math.floor(s.getTime() / 1000), end: Math.floor(s.getTime() / 1000) + mins * 60,
+  });
+  return [ev("TEAM STAND-UP", start, 15, "TODAY"), ev("DENTIST", at(1, 14, 0), 45, "TOMORROW"),
+    ev("BIN DAY", at(2, 0, 0), 1440, "SUN", true)];
+}
+
+// calHeading: a countdown when the event is close, else the bridge's label.
+export function calHeading(e, now, h12) {
+  const t = Math.floor(now.getTime() / 1000);
+  if (!e.all_day) {
+    if (e.start <= t && t < e.end) return `NOW UNTIL ${clockText(new Date(e.end * 1000), h12)}`;
+    const mins = Math.floor((e.start - t + 59) / 60);
+    if (mins > 0 && mins <= 60) return `IN ${mins} MIN`;
+  }
+  return e.label;
+}
+
+function drawCal(c, events, now, h12) {
+  const t = Math.floor(now.getTime() / 1000);
+  const ev = events.filter((e) => e.end > t).slice(0, 3);
+  if (!ev.length) return centred("NO EVENTS", 52, 3, FG) + centred("COMING UP THIS WEEK", 98, 2, c.label);
+  let s = txt(calHeading(ev[0], now, h12), 14, 12, 2, c.dateWd)
+    + boxed(ev[0].title, 14, 38, SCREEN_W - 28, 3, c.value);
+  ev.slice(1).forEach((e, i) => {
+    const y = 84 + i * 30;
+    const day = e.day === "TOMORROW" ? "TMRW" : e.day;
+    const when = e.all_day ? day : e.day === "TODAY" ? e.time : `${day} ${e.time}`;
+    const tx = 14 + textWidth(when, 2) + 12;
+    s += txt(when, 14, y, 2, c.sec)
+      + txt(e.title.slice(0, Math.max(0, Math.floor((SCREEN_W - 14 - tx) / 12))), tx, y, 2, c.value);
+  });
+  return s;
+}
+
+// The bridge's answer for one page, when the last Check returned it working.
+function liveBridge(live, key) {
+  const b = live && live.bridge;
+  const part = b && b[key];
+  return part && part.ok ? part : null;
 }
 
 // ── The holder ────────────────────────────────────────────
@@ -499,11 +643,16 @@ export function createPreview(container) {
     } else {
       if (face) { face.destroy(); face = null; }
       const blink = !reduced();
-      page.innerHTML = key === "clock" ? drawClock(c, now, blink)
+      const h12 = config.clock_format === "12h";
+      const lha = liveBridge(live, "ha"), lnow = liveBridge(live, "now"), lcal = liveBridge(live, "cal");
+      page.innerHTML = key === "clock" ? drawClock(c, now, blink, h12)
         : key === "date" ? drawDate(c, now)
         : key === "weather" ? drawWeather(c, config)
         : key === "moon" ? drawMoon(c, now)
         : key === "stock" ? drawStock(c, config, live)
+        : key === "ha" ? drawHa(c, lha ? lha.items || [] : SAMPLE_HA)
+        : key === "now" ? drawNow(c, lnow || SAMPLE_NOW)
+        : key === "cal" ? drawCal(c, lcal ? lcal.events || [] : sampleCal(now, h12), now, h12)
         : drawGithub(c, live);
     }
     dotLayer.innerHTML = dots(cycle.pages.length, cycle.index);
@@ -511,10 +660,13 @@ export function createPreview(container) {
     let text = S.pageNames[key];
     if (key === "stock" && config.ticker) text += ` · ${String(config.ticker).toUpperCase()}`;
     if (key === "github") text += ` · ${config.github_user}`;
+    const isBridge = BRIDGE_PAGES.includes(key);
     const sample = (key === "weather")
       || (key === "stock" && !isNum(live.price))
-      || (key === "github" && !isNum(live.followers));
+      || (key === "github" && !isNum(live.followers))
+      || (isBridge && !liveBridge(live, key));
     if (sample) text += ` (${S.previewSample})`;
+    else if (isBridge) text += ` (${S.previewLive})`;
     caption.textContent = text;
   }
 

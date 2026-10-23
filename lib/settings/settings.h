@@ -7,9 +7,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
-static const int CONFIG_VERSION = 1;
-static const uint8_t SETTINGS_PAGE_COUNT = 7;
-// Index order matches the PAGE_* ids in main.cpp (face = 0 ... github = 6).
+// 2: the Home, Now playing and Calendar pages, the bridge, page timing,
+// the 12-hour clock and night dimming.
+static const int CONFIG_VERSION = 2;
+static const uint8_t SETTINGS_PAGE_COUNT = 10;
+// Index order matches the PAGE_* ids in main.cpp (face = 0 ... cal = 9).
 extern const char *const SETTINGS_PAGE_KEYS[SETTINGS_PAGE_COUNT];
 
 struct Settings {
@@ -25,6 +27,14 @@ struct Settings {
   bool    tempFahrenheit;
   bool    windMph;
   bool    pages[SETTINGS_PAGE_COUNT];
+  char    bridgeUrl[81];      // "" hides the Home, Now playing and Calendar pages
+  char    bridgeKey[65];      // sent as X-Buddy-Key; "" sends none
+  uint8_t pageSecs;           // auto-advance interval, 3-120 s
+  bool    autoPage;           // auto-advance on at boot (a double tap still toggles it)
+  bool    clock12h;
+  int8_t  nightFrom;          // hour night dimming starts, -1 = off
+  uint8_t nightTo;            // hour it ends, 0-23
+  uint8_t nightLevel;         // night brightness, 0-100 % of the day level
 };
 
 // POSIX rule for a fixed UTC offset in hours, rounded to 15 minutes:
@@ -36,7 +46,7 @@ bool tzRuleFromOffset(float hours, char *out, size_t outLen);
 // Keys a stored file lacked, so they got their defaults ("ticker",
 // "pages.github", ...). The pointers are to static strings.
 struct AddedKeys {
-  const char *keys[24];
+  const char *keys[40];
   uint8_t     count;
 };
 
