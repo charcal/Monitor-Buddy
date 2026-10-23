@@ -58,7 +58,8 @@ class Manifest(unittest.TestCase):
             "version": "1.2.0-rc1", "date": "2026-10-20", "prerelease": True,
             "file": "firmware/v1.2.0-rc1/monitor-buddy-1.2.0-rc1.bin",
             "size": 3, "sha256": hashlib.sha256(b"abc").hexdigest(), "cfg_v": 1,
-            "notes": "https://github.com/IdefixRC/Monitor-Buddy/releases/tag/v1.2.0-rc1"})
+            # The repo that builds the site (GITHUB_REPOSITORY on Actions; a fork's own).
+            "notes": f"{ps.REPO_URL}/releases/tag/v1.2.0-rc1"})
 
     def test_asset_name(self):
         self.assertEqual(ps.asset_name("1.2.0"), "monitor-buddy-1.2.0.bin")
