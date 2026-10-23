@@ -436,6 +436,87 @@ function drawCal(c, events, now, h12) {
   return s;
 }
 
+// ── drawBus, drawFpl, drawMister ──────────────────────────
+
+export const SAMPLE_BUS = Object.freeze({ ok: true, stop: "SHOOTERS HILL", rows: [
+  { line: "89", dest: "LEWISHAM", mins: [2, 11, 21] },
+  { line: "244", dest: "QUEEN ELIZABETH", mins: [6, 19] },
+] });
+
+function drawBus(c, b) {
+  let s = txt(b.stop || "NEXT BUS", 14, 8, 2, c.label);
+  const rows = (b.rows || []).slice(0, 3);
+  if (!rows.length) return s + centred("NO BUSES DUE", 70, 3, FG);
+  rows.forEach((r, i) => {
+    const y = 32 + i * 40;
+    const line = String(r.line);
+    s += txt(line, 14, y, line.length <= 3 ? 4 : 3, c.dateWd);
+    const x = 104;
+    s += txt(String(r.dest).slice(0, Math.floor((SCREEN_W - 14 - x) / 12)), x, y, 2, c.label);
+    let tx = x;
+    (r.mins || []).slice(0, 3).forEach((m, j) => {
+      const t = m <= 0 ? "DUE" : `${m}${j === 0 ? " MIN" : ""}`;
+      s += txt(t, tx, y + 18, 2, j === 0 ? c.ghNum : c.value);
+      tx += textWidth(t, 2) + 18;
+    });
+  });
+  return s;
+}
+
+export function sampleFpl(now) {
+  return { ok: true, team: "CAL'S XI", live: false, gw: 9, gw_points: 48, next_gw: 10,
+    total: 512, rank: 845210, deadline: Math.floor(now.getTime() / 1000) + 2 * 86400 + 4 * 3600 + 600 };
+}
+
+// "2D 04H" or "3H 25M" until the deadline.
+export function fplCountdown(deadline, now) {
+  const left = deadline - Math.floor(now.getTime() / 1000);
+  const d = Math.floor(left / 86400), h = Math.floor(left / 3600) % 24, m = Math.floor(left / 60) % 60;
+  return d > 0 ? `${d}D ${two(h)}H` : `${h}H ${two(m)}M`;
+}
+
+function drawFpl(c, f, now) {
+  const t = Math.floor(now.getTime() / 1000);
+  const countdown = !f.live && f.next_gw && f.deadline && f.deadline > t;
+  let s = "";
+  if (!countdown) {
+    if (!f.gw) return centred("NO GAMEWEEK", 70, 3, FG);
+    const head = f.live ? `GW${f.gw} LIVE` : `GW${f.gw}`;
+    s += txt(head, 14, 12, 2, c.dateWd);
+    if (f.live) s += `<circle cx="${14 + textWidth(head, 2) + 10}" cy="19" r="4" fill="${c.priceDown}"/>`;
+    const pts = String(f.gw_points);
+    const ps = fitSize(pts, 170, 7);
+    s += txt(pts, 14, 40, ps, c.ghNum) + txt("PTS", 14 + textWidth(pts, ps) + 6, 40 + 8 * ps - 16, 2, c.label);
+  } else {
+    s += txt(`GW${f.next_gw} DEADLINE`, 14, 12, 2, c.dateWd);
+    const cd = fplCountdown(f.deadline, now);
+    s += txt(cd, 14, 44, fitSize(cd, 180, 5), c.ghNum);
+    if (f.gw) s += txt(`GW${f.gw} ${f.gw_points} PTS`, 14, 96, 2, c.value);
+  }
+  const rx = 206;
+  const rank = formatCount(f.rank || 0);
+  s += txt("RANK", rx, 40, 2, c.label) + txt(rank, rx, 60, fitSize(rank, SCREEN_W - 14 - rx, 3), c.value)
+    + txt("TOTAL", rx, 94, 2, c.label) + txt(String(f.total || 0), rx, 114, 3, c.value)
+    + txt(String(f.team || "").slice(0, Math.floor((rx - 22) / 12)), 14, 126, 2, c.label);
+  return s;
+}
+
+export function sampleMister(now) {
+  return { ok: true, online: true, playing: true, system: "SUPER NINTENDO", game: "SUPER METROID",
+    started: Math.floor(now.getTime() / 1000) - 23 * 60 };
+}
+
+function drawMister(c, m, now) {
+  if (!m.online) return centred("MISTER IS OFF", 66, 3, c.label);
+  if (!m.playing) return centred("MISTER", 44, 2, c.dateWd) + centred("NOTHING RUNNING", 74, 3, FG);
+  let s = txt(m.system, 14, 12, 2, c.dateWd) + boxed(m.game || "UNKNOWN", 14, 46, SCREEN_W - 28, 3, c.value);
+  if (m.started > 0) {
+    const mins = Math.max(0, Math.floor((now.getTime() / 1000 - m.started) / 60));
+    s += txt(mins >= 60 ? `PLAYING FOR ${Math.floor(mins / 60)}H ${two(mins % 60)}M` : `PLAYING FOR ${mins} MIN`, 14, 92, 2, c.label);
+  }
+  return s;
+}
+
 // The bridge's answer for one page, when the last Check returned it working.
 function liveBridge(live, key) {
   const b = live && live.bridge;
@@ -653,6 +734,9 @@ export function createPreview(container) {
         : key === "ha" ? drawHa(c, lha ? lha.items || [] : SAMPLE_HA)
         : key === "now" ? drawNow(c, lnow || SAMPLE_NOW)
         : key === "cal" ? drawCal(c, lcal ? lcal.events || [] : sampleCal(now, h12), now, h12)
+        : key === "bus" ? drawBus(c, liveBridge(live, "bus") || SAMPLE_BUS)
+        : key === "fpl" ? drawFpl(c, liveBridge(live, "fpl") || sampleFpl(now), now)
+        : key === "mister" ? drawMister(c, liveBridge(live, "mister") || sampleMister(now), now)
         : drawGithub(c, live);
     }
     dotLayer.innerHTML = dots(cycle.pages.length, cycle.index);

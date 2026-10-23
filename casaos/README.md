@@ -54,6 +54,9 @@ Fill in the sections you want in `.env`, then `docker compose up -d` to apply. A
 - **Now playing:** any of Plex (`PLEX_URL`, `PLEX_TOKEN`), Jellyfin (`JELLYFIN_URL`, `JELLYFIN_API_KEY` from Dashboard → API Keys) and Spotify. Something playing beats something paused; ties go by `NOWPLAYING_ORDER`.
 - **Spotify:** create an app at developer.spotify.com with the redirect URI `https://cal-mini.local:8443/bridge/spotify/callback`, put its ID and secret in `.env`, restart, then open `https://cal-mini.local:8443/bridge/spotify/login` once. The token is kept in `/DATA/AppData/monitor-buddy/bridge`.
 - **Calendar:** one or more ICS links in `CAL_ICS_URLS`. For Google Calendar, use Settings → your calendar → **Secret address in iCal format**. Recurring events and all-day events are handled.
+- **Next bus:** `TFL_STOPS` takes the 5-digit code printed on the bus stop sign (or the stop's id from its tfl.gov.uk page), up to three, each optionally `=Label`. `TFL_LINES=89,244` limits the routes shown.
+- **Fantasy Premier League:** `FPL_TEAM_ID` is the number in your Points page address: `fantasy.premierleague.com/entry/1234567/event/9` → `1234567`. During a gameweek the page shows live points; between gameweeks, a countdown to the deadline.
+- **MiSTer:** `MISTER_URL=http://<mister-ip>:7497`, Zaparoo's address. When the MiSTer is off, the page says so.
 - **Key (optional):** set `BUDDY_KEY` and enter the same value as **Bridge key** in the flasher. Without it, anyone on your network can read what the bridge shows.
 
 `https://cal-mini.local:8443/bridge/health` shows what's configured.

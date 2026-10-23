@@ -8,10 +8,10 @@
 #include <stdint.h>
 
 // 2: the Home, Now playing and Calendar pages, the bridge, page timing,
-// the 12-hour clock and night dimming.
-static const int CONFIG_VERSION = 2;
-static const uint8_t SETTINGS_PAGE_COUNT = 10;
-// Index order matches the PAGE_* ids in main.cpp (face = 0 ... cal = 9).
+// the 12-hour clock and night dimming. 3: the Bus, FPL and MiSTer pages.
+static const int CONFIG_VERSION = 3;
+static const uint8_t SETTINGS_PAGE_COUNT = 13;
+// Index order matches the PAGE_* ids in main.cpp (face = 0 ... mister = 12).
 extern const char *const SETTINGS_PAGE_KEYS[SETTINGS_PAGE_COUNT];
 
 struct Settings {

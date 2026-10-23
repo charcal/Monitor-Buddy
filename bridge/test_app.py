@@ -191,6 +191,120 @@ def test_api_key_guard(bridge, monkeypatch):
 def test_summary_shape(bridge):
     c = bridge.app.test_client()
     body = c.get("/api/summary").get_json()
-    assert set(body) == {"ok", "ha", "now", "cal"}
+    assert set(body) == {"ok", "ha", "now", "cal", "bus", "fpl", "mister"}
     assert body["now"]["playing"] is False
-    assert len(json.dumps(body)) < 1500   # comfortably small for the Buddy
+    assert len(json.dumps(body)) < 2000   # comfortably small for the Buddy
+
+
+# ── Next bus ──────────────────────────────────────────────
+
+def test_bus_rows_group_and_sort(bridge, monkeypatch):
+    monkeypatch.setenv("TFL_STOPS", "52184=Shooters Hill, 490012345E")
+    monkeypatch.setenv("TFL_LINES", "89,244")
+    calls = []
+    arrivals = {
+        "490099999W": [{"lineName": "89", "destinationName": "Lewisham", "timeToStation": 700},
+                       {"lineName": "89", "destinationName": "Lewisham", "timeToStation": 150},
+                       {"lineName": "486", "destinationName": "Bexleyheath", "timeToStation": 30}],
+        "490012345E": [{"lineName": "244", "destinationName": "Queen Elizabeth Hospital", "timeToStation": 45},
+                       {"lineName": "89", "destinationName": "Lewisham", "timeToStation": 1300},
+                       {"lineName": "89", "destinationName": "Lewisham", "timeToStation": 1900}],
+    }
+
+    def get(url, **kw):
+        calls.append(url)
+        if url.endswith("/StopPoint/Sms/52184"):
+            return Resp({"naptanId": "490099999W"})
+        return Resp(arrivals[url.split("/")[-2]])
+
+    monkeypatch.setattr(bridge.session, "get", get)
+    out = bridge.fetch_bus()
+    assert out["ok"] and out["stop"] == "SHOOTERS HILL"
+    assert out["rows"][0] == {"line": "244", "dest": "QUEEN ELIZABETH", "mins": [0]}
+    assert out["rows"][1] == {"line": "89", "dest": "LEWISHAM", "mins": [2, 11, 21]}   # capped at 3 times
+    assert all(r["line"] != "486" for r in out["rows"])                                  # filtered by TFL_LINES
+    bridge.fetch_bus()
+    assert sum("/Sms/" in c for c in calls) == 1                                          # the code is looked up once
+
+
+def test_bus_not_configured_and_errors(bridge, monkeypatch):
+    assert bridge.fetch_bus()["setup"] is False
+    monkeypatch.setenv("TFL_STOPS", "490012345E")
+    monkeypatch.setattr(bridge.session, "get", lambda *a, **k: Resp(status=503))
+    out = bridge.fetch_bus()
+    assert out["ok"] is False and out["setup"] is True
+
+
+# ── Fantasy Premier League ────────────────────────────────
+
+def fpl_fake(monkeypatch, bridge, *, finished, data_checked):
+    data = {
+        "bootstrap-static/": {"events": [
+            {"id": 8, "is_current": False, "finished": True, "data_checked": True},
+            {"id": 9, "is_current": True, "finished": finished, "data_checked": data_checked},
+            {"id": 10, "is_next": True, "deadline_time": "2026-10-31T18:30:00Z"}]},
+        "entry/1234567/": {"name": "Cal's Calamity XI", "summary_overall_points": 512,
+                           "summary_overall_rank": 845210, "summary_event_points": 48},
+        "entry/1234567/event/9/picks/": {"entry_history": {"event_transfers_cost": 4},
+                                         "picks": [{"element": 1, "multiplier": 2}, {"element": 2, "multiplier": 1},
+                                                   {"element": 3, "multiplier": 0}]},
+        "event/9/live/": {"elements": [{"id": 1, "stats": {"total_points": 9}}, {"id": 2, "stats": {"total_points": 6}},
+                                       {"id": 3, "stats": {"total_points": 15}}]},
+    }
+    monkeypatch.setattr(bridge.session, "get", lambda url, **k: Resp(data[url.split("/api/", 1)[1]]))
+
+
+def test_fpl_live_gameweek(bridge, monkeypatch):
+    monkeypatch.setenv("FPL_TEAM_ID", "1234567")
+    fpl_fake(monkeypatch, bridge, finished=False, data_checked=False)
+    out = bridge.fetch_fpl()
+    assert out["team"] == "CAL'S CALAMITY XI"
+    assert out["gw"] == 9 and out["live"] is True
+    assert out["gw_points"] == 9 * 2 + 6 - 4          # captain doubled, bench ignored, hit taken
+    assert out["next_gw"] == 10 and out["deadline"] == int(datetime(2026, 10, 31, 18, 30, tzinfo=__import__("datetime").timezone.utc).timestamp())
+    assert out["rank"] == 845210 and out["total"] == 512
+
+
+def test_fpl_between_gameweeks(bridge, monkeypatch):
+    monkeypatch.setenv("FPL_TEAM_ID", "1234567")
+    fpl_fake(monkeypatch, bridge, finished=True, data_checked=True)
+    out = bridge.fetch_fpl()
+    assert out["live"] is False and out["gw_points"] == 48
+
+
+def test_fpl_not_configured(bridge, monkeypatch):
+    assert bridge.fetch_fpl()["setup"] is False
+    monkeypatch.setenv("FPL_TEAM_ID", "my team")
+    assert bridge.fetch_fpl()["setup"] is False
+
+
+# ── MiSTer (Zaparoo) ──────────────────────────────────────
+
+def test_mister_playing_idle_and_off(bridge, monkeypatch):
+    monkeypatch.setenv("MISTER_URL", "http://mister:7497/")
+    sent = []
+
+    def post(url, json=None, **kw):
+        sent.append((url, json["method"]))
+        return Resp({"jsonrpc": "2.0", "id": json["id"], "result": {"database": {}, "active": [
+            {"slot": "background", "systemName": "Music", "mediaName": "x", "started": "2026-10-23T21:00:00Z"},
+            {"systemId": "SNES", "systemName": "Super Nintendo", "mediaName": "Super Metroid (Europe)",
+             "mediaPath": "/media/fat/games/SNES/Super Metroid.sfc", "started": "2026-10-23T21:10:00Z"}]}})
+
+    monkeypatch.setattr(bridge.session, "post", post)
+    out = bridge.fetch_mister()
+    assert sent[0] == ("http://mister:7497/api/v0.1", "media")
+    assert out["playing"] and out["system"] == "SUPER NINTENDO" and out["game"] == "SUPER METROID (EUROPE)"
+    assert out["started"] == 1792789800
+
+    monkeypatch.setattr(bridge.session, "post", lambda *a, **k: Resp({"result": {"active": []}}))
+    assert bridge.fetch_mister()["playing"] is False
+
+    import requests
+
+    def off(*a, **k):
+        raise requests.ConnectionError("refused")
+
+    monkeypatch.setattr(bridge.session, "post", off)
+    out = bridge.fetch_mister()
+    assert out["ok"] and out["online"] is False and out["playing"] is False

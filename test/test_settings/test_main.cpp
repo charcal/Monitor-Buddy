@@ -90,7 +90,8 @@ static void test_load_applies_every_key() {
     "\"ticker\":\"AVGO\",\"stock_key\":\"abc123\",\"lat\":\"48.1374\",\"lon\":\"11.5755\","
     "\"temp_unit\":\"fahrenheit\",\"wind_unit\":\"mph\","
     "\"pages\":{\"face\":true,\"clock\":false,\"date\":true,\"weather\":true,"
-    "\"moon\":false,\"stock\":true,\"github\":true,\"ha\":false,\"now\":true,\"cal\":true},"
+    "\"moon\":false,\"stock\":true,\"github\":true,\"ha\":false,\"now\":true,\"cal\":true,"
+    "\"bus\":true,\"fpl\":false,\"mister\":true},"
     "\"bridge_url\":\"http://192.168.86.48:8787\",\"bridge_key\":\"k_1\",\"page_secs\":15,"
     "\"auto_page\":false,\"clock_format\":\"12h\",\"night_from\":22,\"night_to\":6,\"night_level\":0}");
   Settings out; AddedKeys added; JsonDocument inv;
@@ -105,6 +106,8 @@ static void test_load_applies_every_key() {
   TEST_ASSERT_EQUAL(0, out.nightLevel);
   TEST_ASSERT_FALSE(out.pages[7]);
   TEST_ASSERT_TRUE(out.pages[9]);
+  TEST_ASSERT_FALSE(out.pages[11]);
+  TEST_ASSERT_TRUE(out.pages[12]);
   TEST_ASSERT_TRUE(out.mountRight);
   TEST_ASSERT_EQUAL(4, out.theme);
   TEST_ASSERT_EQUAL_STRING("octo-cat", out.githubUser);
@@ -285,9 +288,10 @@ static void test_load_v1_file_reports_every_new_key() {
   settingsLoad(makeDefaults(), file.as<JsonVariantConst>(), out, added, inv.to<JsonObject>());
   TEST_ASSERT_EQUAL(0, inv.size());
   const char *expected[] = {"bridge_url", "bridge_key", "page_secs", "auto_page", "clock_format",
-                            "night_from", "night_to", "night_level", "pages.ha", "pages.now", "pages.cal"};
+                            "night_from", "night_to", "night_level", "pages.ha", "pages.now", "pages.cal",
+                            "pages.bus", "pages.fpl", "pages.mister"};
   for (const char *k : expected) TEST_ASSERT_TRUE_MESSAGE(hasAdded(added, k), k);
-  TEST_ASSERT_EQUAL(11, added.count);
+  TEST_ASSERT_EQUAL(14, added.count);
   TEST_ASSERT_EQUAL(8, out.pageSecs);
   TEST_ASSERT_EQUAL_STRING("GMT0BST,M3.5.0/1,M10.5.0", out.tzRule);
 }

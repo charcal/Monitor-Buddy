@@ -1,7 +1,7 @@
 // The bridge pages, the bridge check and the settings added in version 2.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { pageList, calHeading, sampleCal, SAMPLE_HA } from "../web/js/preview.js";
+import { pageList, calHeading, sampleCal, SAMPLE_HA, fplCountdown } from "../web/js/preview.js";
 import { checkBridge, BRIDGE_PATH } from "../web/js/checks.js";
 import { bridgeMessage, previewPageFor, redactLog, DEFAULTS } from "../web/js/form.js";
 import { parseConfigH } from "../web/js/configh.js";
@@ -11,9 +11,10 @@ const zones = JSON.parse(readFileSync(new URL("../web/vendor/posix_tz_db/zones.j
 const on = { ...DEFAULTS, pages: { ...DEFAULTS.pages } };
 
 test("the bridge pages hide while bridge_url is empty, like buildPageList", () => {
-  assert.deepEqual(pageList({ ...on, bridge_url: "" }).filter((p) => ["ha", "now", "cal"].includes(p)), []);
+  const bridgePages = ["ha", "now", "cal", "bus", "fpl", "mister"];
+  assert.deepEqual(pageList({ ...on, bridge_url: "" }).filter((p) => bridgePages.includes(p)), []);
   const withBridge = pageList({ ...on, bridge_url: "http://10.0.0.2:8787" });
-  assert.deepEqual(withBridge.slice(-3), ["ha", "now", "cal"]);
+  assert.deepEqual(withBridge.slice(-6), bridgePages);
   const noNow = pageList({ ...on, bridge_url: "http://10.0.0.2:8787", pages: { ...on.pages, now: false } });
   assert.ok(!noNow.includes("now") && noNow.includes("cal"));
 });
@@ -85,4 +86,24 @@ test("config.h import reads the version 2 defines, and an old file doesn't list 
   assert.equal(r.config.pages.cal, false);
   const old = parseConfigH('#define THEME 1\n', zones);
   assert.ok(!old.defaulted.includes("bridge_url") && old.defaulted.includes("ticker"));
+});
+
+test("bridgeMessage adds bus, FPL and MiSTer when the bridge reports them", () => {
+  const base = { ha: { ok: true, items: [] }, now: { ok: true }, cal: { ok: true, events: [] } };
+  const msg = bridgeMessage({ status: "ok", summary: { ...base,
+    bus: { ok: true, rows: [{}, {}] }, fpl: { ok: true, gw_points: 48 },
+    mister: { ok: true, online: true, playing: true, game: "SUPER METROID" } } });
+  assert.match(msg, /2 bus routes due, FPL 48 pts, MiSTer running SUPER METROID$/);
+  const off = bridgeMessage({ status: "ok", summary: { ...base,
+    bus: { ok: false, setup: false }, fpl: { ok: false, setup: false }, mister: { ok: true, online: false } } });
+  assert.match(off, /buses not set up, FPL not set up, MiSTer off$/);
+  // An older bridge without the new pages: no extra parts.
+  assert.doesNotMatch(bridgeMessage({ status: "ok", summary: base }), /bus|FPL|MiSTer/);
+});
+
+test("fplCountdown: days and hours, then hours and minutes", () => {
+  const now = new Date(2026, 9, 23, 12, 0, 0);
+  const t = Math.floor(now.getTime() / 1000);
+  assert.equal(fplCountdown(t + 2 * 86400 + 4 * 3600 + 600, now), "2D 04H");
+  assert.equal(fplCountdown(t + 3 * 3600 + 25 * 60, now), "3H 25M");
 });

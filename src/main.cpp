@@ -157,6 +157,15 @@
 #ifndef SHOW_CAL
   #define SHOW_CAL true
 #endif
+#ifndef SHOW_BUS
+  #define SHOW_BUS true
+#endif
+#ifndef SHOW_FPL
+  #define SHOW_FPL true
+#endif
+#ifndef SHOW_MISTER
+  #define SHOW_MISTER true
+#endif
 #ifndef BRIDGE_URL
   #define BRIDGE_URL ""
 #endif
@@ -258,6 +267,12 @@ static constexpr uint32_t HA_REFRESH_BG_MS      = 2UL * 60UL * 1000UL;
 static constexpr uint32_t NOW_REFRESH_SHOWN_MS  = 5UL * 1000UL;
 static constexpr uint32_t NOW_REFRESH_BG_MS     = 60UL * 1000UL;
 static constexpr uint32_t CAL_REFRESH_MS        = 5UL * 60UL * 1000UL;
+static constexpr uint32_t BUS_REFRESH_SHOWN_MS  = 20UL * 1000UL;
+static constexpr uint32_t BUS_REFRESH_BG_MS     = 90UL * 1000UL;
+static constexpr uint32_t FPL_REFRESH_SHOWN_MS  = 60UL * 1000UL;
+static constexpr uint32_t FPL_REFRESH_BG_MS     = 10UL * 60UL * 1000UL;
+static constexpr uint32_t MISTER_REFRESH_SHOWN_MS = 10UL * 1000UL;
+static constexpr uint32_t MISTER_REFRESH_BG_MS    = 60UL * 1000UL;
 // A touch while the backlight is off at night wakes it for this long.
 static constexpr uint32_t NIGHT_WAKE_MS         = 30UL * 1000UL;
 
@@ -346,9 +361,15 @@ bool bridgeConfigured();
 bool fetchHa();
 bool fetchNow();
 bool fetchCal();
+bool fetchBus();
+bool fetchFpl();
+bool fetchMister();
 void drawHa();
 void drawNow();
 void drawCal();
+void drawBus();
+void drawFpl();
+void drawMister();
 uint32_t pageIntervalMs();
 void applyBacklight();
 bool nightNow();
@@ -636,7 +657,7 @@ bool bsp_touch_get_coordinates(uint16_t *outX, uint16_t *outY) {
 
 static const int SCREEN_W         = 320;
 static const int SCREEN_H         = 172;
-static const uint8_t APP_COUNT    = 10;  // total number of pages defined
+static const uint8_t APP_COUNT    = 13;  // total number of pages defined
 
 // Page identifiers, in fixed display order. These index the render switch in
 // loop(); which are actually shown is decided by settings.pages.
@@ -650,6 +671,9 @@ static constexpr uint8_t PAGE_GITHUB  = 6;
 static constexpr uint8_t PAGE_HA      = 7;   // Home Assistant values, from the bridge
 static constexpr uint8_t PAGE_NOW     = 8;   // now playing, from the bridge
 static constexpr uint8_t PAGE_CAL     = 9;   // next calendar events, from the bridge
+static constexpr uint8_t PAGE_BUS     = 10;  // next buses (TfL), from the bridge
+static constexpr uint8_t PAGE_FPL     = 11;  // Fantasy Premier League, from the bridge
+static constexpr uint8_t PAGE_MISTER  = 12;  // what's running on the MiSTer, from the bridge
 
 // -- Face expressions (ported from DESKBUDDY-1.0, Edison Science Corner) --
 // 9 moods, cycled by single-tapping the face page. A fast spin of the board
@@ -684,7 +708,8 @@ bool settingsStored = false;   // booted from a readable /config.json; GET "stor
 
 static_assert(PAGE_FACE == 0 && PAGE_CLOCK == 1 && PAGE_DATE == 2 &&
               PAGE_WEATHER == 3 && PAGE_MOON == 4 && PAGE_STOCK == 5 &&
-              PAGE_GITHUB == 6 && PAGE_HA == 7 && PAGE_NOW == 8 && PAGE_CAL == 9,
+              PAGE_GITHUB == 6 && PAGE_HA == 7 && PAGE_NOW == 8 && PAGE_CAL == 9 &&
+              PAGE_BUS == 10 && PAGE_FPL == 11 && PAGE_MISTER == 12,
               "settings.pages[] is indexed by PAGE_* ids");
 static_assert(SETTINGS_PAGE_COUNT == APP_COUNT,
               "settings.pages[] needs one entry per page");
@@ -771,8 +796,14 @@ struct NowData     { bool valid, playing, paused; char source[10]; char title[44
 struct CalEvent    { char title[44]; char label[22]; char day[10]; char time[9];
                      int64_t start, end; bool allDay; };
 struct CalData     { bool valid, setup; uint8_t count; CalEvent events[3]; uint32_t updatedAt; };
+struct BusRow      { char line[5]; char dest[17]; uint8_t count; uint16_t mins[3]; };
+struct BusData     { bool valid, setup; char stop[21]; uint8_t count; BusRow rows[3]; uint32_t updatedAt; };
+struct FplData     { bool valid, setup, live; char team[21]; int gw, gwPoints, nextGw;
+                     int32_t total, rank; int64_t deadline; uint32_t updatedAt; };
+struct MisterData  { bool valid, setup, online, playing; char system[21]; char game[44];
+                     int64_t started; uint32_t updatedAt; };
 struct NetData     { WeatherData weather; StockData stock; GithubData github;
-                     HaData ha; NowData now; CalData cal; };
+                     HaData ha; NowData now; CalData cal; BusData bus; FplData fpl; MisterData mister; };
 
 NetData           netShared = {};
 NetData           netView   = {};
@@ -1047,7 +1078,7 @@ void buildPageList() {
     if (!settings.pages[i]) continue;
     if (i == PAGE_GITHUB && !githubConfigured()) continue;  // "" hides the page
     if (i == PAGE_STOCK && !stockConfigured()) continue;    // no key hides the page
-    if ((i == PAGE_HA || i == PAGE_NOW || i == PAGE_CAL) && !bridgeConfigured()) continue;
+    if (i >= PAGE_HA && i <= PAGE_MISTER && !bridgeConfigured()) continue;   // the bridge pages
     pageOrder[pageCount++] = i;
   }
   if (pageCount == 0) pageOrder[pageCount++] = PAGE_FACE;  // never leave it empty
@@ -1417,6 +1448,66 @@ bool fetchCal() {
   c.updatedAt = millis();
   c.valid     = true;
   publishNetData(netShared.cal, c);
+  return true;
+}
+
+bool fetchBus() {
+  JsonDocument doc;
+  if (!bridgeGet("/api/bus", doc)) return false;
+  BusData b = {};
+  b.setup = !bridgeNotSetUp(doc);
+  if (b.setup && !(doc["ok"] | false)) return false;
+  copyText(b.stop, sizeof(b.stop), doc["stop"] | "");
+  for (JsonObjectConst r : doc["rows"].as<JsonArrayConst>()) {
+    if (b.count >= 3) break;
+    BusRow &row = b.rows[b.count++];
+    copyText(row.line, sizeof(row.line), r["line"] | "");
+    copyText(row.dest, sizeof(row.dest), r["dest"] | "");
+    for (JsonVariantConst m : r["mins"].as<JsonArrayConst>()) {
+      if (row.count >= 3) break;
+      row.mins[row.count++] = (uint16_t)constrain(m.as<int>(), 0, 999);
+    }
+  }
+  b.updatedAt = millis();
+  b.valid     = true;
+  publishNetData(netShared.bus, b);
+  return true;
+}
+
+bool fetchFpl() {
+  JsonDocument doc;
+  if (!bridgeGet("/api/fpl", doc)) return false;
+  FplData f = {};
+  f.setup = !bridgeNotSetUp(doc);
+  if (f.setup && !(doc["ok"] | false)) return false;
+  copyText(f.team, sizeof(f.team), doc["team"] | "");
+  f.live     = doc["live"] | false;
+  f.gw       = doc["gw"] | 0;
+  f.gwPoints = doc["gw_points"] | 0;
+  f.nextGw   = doc["next_gw"] | 0;
+  f.total    = doc["total"] | 0;
+  f.rank     = doc["rank"] | 0;
+  f.deadline = doc["deadline"] | (int64_t)0;
+  f.updatedAt = millis();
+  f.valid     = true;
+  publishNetData(netShared.fpl, f);
+  return true;
+}
+
+bool fetchMister() {
+  JsonDocument doc;
+  if (!bridgeGet("/api/mister", doc)) return false;
+  MisterData m = {};
+  m.setup = !bridgeNotSetUp(doc);
+  if (m.setup && !(doc["ok"] | false)) return false;
+  m.online  = doc["online"] | false;
+  m.playing = doc["playing"] | false;
+  copyText(m.system, sizeof(m.system), doc["system"] | "");
+  copyText(m.game,   sizeof(m.game),   doc["game"] | "");
+  m.started = doc["started"] | (int64_t)0;
+  m.updatedAt = millis();
+  m.valid     = true;
+  publishNetData(netShared.mister, m);
   return true;
 }
 
@@ -2241,6 +2332,117 @@ void drawCal() {
   drawPageDots();
 }
 
+// ── Next bus page (TfL) ───────────────────────────────────
+// Up to three rows: the route big on the left, its destination and the next
+// few departures beside it. Minutes count down between fetches.
+
+void drawBus() {
+  gfx->fillScreen(BG);
+  const BusData &b = netView.bus;
+  if (drawBridgeGate(b.valid, b.setup, "NEXT BUS")) return;
+  textAt(b.stop[0] ? b.stop : "NEXT BUS", 14, 8, 2, COL_LABEL);
+  if (b.count == 0) { centeredText("NO BUSES DUE", 70, 3); drawPageDots(); return; }
+  uint16_t age = (uint16_t)((millis() - b.updatedAt) / 60000UL);
+  for (uint8_t i = 0; i < b.count; i++) {
+    const BusRow &r = b.rows[i];
+    int y = 32 + i * 40;
+    uint8_t ls = strlen(r.line) <= 3 ? 4 : 3;
+    textAt(r.line, 14, y, ls, COL_DATE_WD);
+    const int x = 104;
+    char dest[17];
+    truncTo(dest, sizeof(dest), r.dest, (SCREEN_W - 14 - x) / 12);
+    textAt(dest, x, y, 2, COL_LABEL);
+    // "DUE  11  21": the first in the accent colour.
+    int tx = x;
+    for (uint8_t j = 0; j < r.count; j++) {
+      int m = (int)r.mins[j] - (int)age;
+      char t[8];
+      if (m <= 0) snprintf(t, sizeof(t), "DUE");
+      else snprintf(t, sizeof(t), "%d%s", m, j == 0 ? " MIN" : "");
+      textAt(t, tx, y + 18, 2, j == 0 ? COL_GHNUM : COL_VALUE);
+      tx += textW(t, 2) + 18;
+    }
+  }
+  drawPageDots();
+}
+
+// ── Fantasy Premier League page ───────────────────────────
+// During a gameweek: live points, rank and total. Between gameweeks: a
+// countdown to the next deadline.
+
+void drawFpl() {
+  gfx->fillScreen(BG);
+  const FplData &f = netView.fpl;
+  if (drawBridgeGate(f.valid, f.setup, "FANTASY PL")) return;
+  char line[28], rank[12];
+  formatCount(f.rank, rank, sizeof(rank));
+  int64_t now = ntpSynced ? (int64_t)time(nullptr) : 0;
+  bool countdown = !f.live && f.nextGw && f.deadline && now && f.deadline > now;
+
+  if (!countdown) {
+    if (!f.gw) { centeredText("NO GAMEWEEK", 70, 3); drawPageDots(); return; }
+    snprintf(line, sizeof(line), f.live ? "GW%d LIVE" : "GW%d", f.gw);
+    textAt(line, 14, 12, 2, COL_DATE_WD);
+    if (f.live) gfx->fillCircle(14 + textW(line, 2) + 10, 19, 4, COL_PRICE_DOWN);
+    char pts[8];
+    snprintf(pts, sizeof(pts), "%d", f.gwPoints);
+    uint8_t ps = fitSize(pts, 170, 7);
+    textAt(pts, 14, 40, ps, COL_GHNUM);
+    textAt("PTS", 14 + textW(pts, ps) + 6, 40 + 8 * ps - 16, 2, COL_LABEL);
+  } else {
+    snprintf(line, sizeof(line), "GW%d DEADLINE", f.nextGw);
+    textAt(line, 14, 12, 2, COL_DATE_WD);
+    int64_t left = f.deadline - now;
+    long d = (long)(left / 86400), h = (long)(left / 3600 % 24), m = (long)(left / 60 % 60);
+    if (d > 0) snprintf(line, sizeof(line), "%ldD %02ldH", d, h);
+    else       snprintf(line, sizeof(line), "%ldH %02ldM", h, m);
+    textAt(line, 14, 44, fitSize(line, 180, 5), COL_GHNUM);
+    if (f.gw) {
+      snprintf(line, sizeof(line), "GW%d %d PTS", f.gw, f.gwPoints);
+      textAt(line, 14, 96, 2, COL_VALUE);
+    }
+  }
+  // Right column: rank and total.
+  const int rx = 206;
+  textAt("RANK", rx, 40, 2, COL_LABEL);
+  textAt(rank, rx, 60, fitSize(rank, SCREEN_W - 14 - rx, 3), COL_VALUE);
+  snprintf(line, sizeof(line), "%ld", (long)f.total);
+  textAt("TOTAL", rx, 94, 2, COL_LABEL);
+  textAt(line, rx, 114, 3, COL_VALUE);
+  char team[16];
+  truncTo(team, sizeof(team), f.team, (rx - 14 - 8) / 12);
+  textAt(team, 14, 126, 2, COL_LABEL);
+  drawPageDots();
+}
+
+// ── MiSTer page (Zaparoo) ─────────────────────────────────
+
+void drawMister() {
+  gfx->fillScreen(BG);
+  const MisterData &m = netView.mister;
+  if (drawBridgeGate(m.valid, m.setup, "MISTER")) return;
+  if (!m.online) {
+    centeredTextColor("MISTER IS OFF", 66, 3, COL_LABEL);
+    drawPageDots(); return;
+  }
+  if (!m.playing) {
+    centeredTextColor("MISTER", 44, 2, COL_DATE_WD);
+    centeredText("NOTHING RUNNING", 74, 3);
+    drawPageDots(); return;
+  }
+  textAt(m.system, 14, 12, 2, COL_DATE_WD);
+  marqueeText(m.game[0] ? m.game : "UNKNOWN", 14, 46, SCREEN_W - 28, 3, COL_VALUE);
+  if (ntpSynced && m.started > 0) {
+    int64_t mins = ((int64_t)time(nullptr) - m.started) / 60;
+    if (mins < 0) mins = 0;
+    char t[28];
+    if (mins >= 60) snprintf(t, sizeof(t), "PLAYING FOR %dH %02dM", (int)(mins / 60), (int)(mins % 60));
+    else            snprintf(t, sizeof(t), "PLAYING FOR %d MIN", (int)mins);
+    textAt(t, 14, 92, 2, COL_LABEL);
+  }
+  drawPageDots();
+}
+
 // ── Captive-portal screen ─────────────────────────────────
 // Shown full-screen while AWM's portal is running, so the user can read
 // the AP name/password off the device itself.
@@ -2343,7 +2545,8 @@ Settings defaultsFromConfig() {
   d.tempFahrenheit = TEMP[0] == 'f';
   d.windMph        = strcmp(WIND, "mph") == 0;
   const bool pages[SETTINGS_PAGE_COUNT] = {SHOW_FACE, SHOW_CLOCK, SHOW_DATE,
-      SHOW_WEATHER, SHOW_MOON, SHOW_STOCK, SHOW_GITHUB, SHOW_HA, SHOW_NOW, SHOW_CAL};
+      SHOW_WEATHER, SHOW_MOON, SHOW_STOCK, SHOW_GITHUB, SHOW_HA, SHOW_NOW, SHOW_CAL,
+      SHOW_BUS, SHOW_FPL, SHOW_MISTER};
   memcpy(d.pages, pages, sizeof(pages));
   strlcpy(d.bridgeUrl, BRIDGE_URL, sizeof(d.bridgeUrl));
   strlcpy(d.bridgeKey, BRIDGE_KEY, sizeof(d.bridgeKey));
@@ -2880,6 +3083,7 @@ static bool stale(bool valid, uint32_t updatedAt, uint32_t now, uint32_t ms) {
 
 void netTask(void *) {
   FetchPacer weatherPacer, stockPacer, githubPacer, haPacer, nowPacer, calPacer;
+  FetchPacer busPacer, fplPacer, misterPacer;
   uint32_t lastHealthLogMs = millis();
   bool tlsHealthLogged = false;
 
@@ -2912,6 +3116,24 @@ void netTask(void *) {
         && stale(netShared.cal.valid, netShared.cal.updatedAt, now, CAL_REFRESH_MS)
         && calPacer.ready(now)) {
       runFetch("cal", fetchCal, calPacer, now, 0, FETCH_RETRY_MS);
+      ran = true;
+    } else if (bridge && settings.pages[PAGE_BUS]
+        && stale(netShared.bus.valid, netShared.bus.updatedAt, now,
+                 shown == PAGE_BUS ? BUS_REFRESH_SHOWN_MS : BUS_REFRESH_BG_MS)
+        && busPacer.ready(now)) {
+      runFetch("bus", fetchBus, busPacer, now, 0, FETCH_RETRY_MS);
+      ran = true;
+    } else if (bridge && settings.pages[PAGE_MISTER]
+        && stale(netShared.mister.valid, netShared.mister.updatedAt, now,
+                 shown == PAGE_MISTER ? MISTER_REFRESH_SHOWN_MS : MISTER_REFRESH_BG_MS)
+        && misterPacer.ready(now)) {
+      runFetch("mister", fetchMister, misterPacer, now, 0, FETCH_RETRY_MS);
+      ran = true;
+    } else if (bridge && settings.pages[PAGE_FPL]
+        && stale(netShared.fpl.valid, netShared.fpl.updatedAt, now,
+                 shown == PAGE_FPL ? FPL_REFRESH_SHOWN_MS : FPL_REFRESH_BG_MS)
+        && fplPacer.ready(now)) {
+      runFetch("fpl", fetchFpl, fplPacer, now, 0, FETCH_RETRY_MS);
       ran = true;
     } else if (settings.pages[PAGE_WEATHER]
         && (!netShared.weather.valid || now - netShared.weather.updatedAt >= WEATHER_REFRESH_INTERVAL_MS)
@@ -3158,7 +3380,10 @@ void loop() {
     case 6: drawGithub();     break;
     case 7: drawHa();         break;
     case 8: drawNow();        break;
-    default: drawCal();       break;
+    case 9: drawCal();        break;
+    case 10: drawBus();       break;
+    case 11: drawFpl();       break;
+    default: drawMister();    break;
   }
   // Brightness or auto-advance feedback banner — shown briefly after a gesture.
   if (millis() < brightnessBannerUntil) {

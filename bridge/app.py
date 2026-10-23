@@ -10,7 +10,10 @@ upper-case ASCII that its 5x7 font can draw, already cut to fit.
     GET /api/ha            up to 3 Home Assistant values
     GET /api/now           what's playing on Plex, Jellyfin or Spotify
     GET /api/cal           the next few calendar events (?fmt=12 for 12-hour times)
-    GET /api/summary       all three at once, for the web flasher's Check button
+    GET /api/bus           next buses at your stops (TfL)
+    GET /api/fpl           Fantasy Premier League points, rank and deadline
+    GET /api/mister        what's running on the MiSTer (Zaparoo)
+    GET /api/summary       all of them at once, for the web flasher's Check button
     GET /spotify/login     one-time Spotify sign-in (stores a refresh token in /data)
 
 Everything is configured with environment variables; see .env.example.
@@ -447,6 +450,173 @@ def fetch_cal(h12: bool = False) -> dict:
             "events": [event_json(e, now, h12) for e in events[:limit]]}
 
 
+# ── Next bus (TfL) ────────────────────────────────────────
+# TFL_STOPS: stops as NaPTAN ids (490000123N) or the 5-digit code on the stop's
+# sign (52184), each optionally =Label. TFL_LINES limits the routes shown.
+
+TFL_API = "https://api.tfl.gov.uk"
+BUS_ROWS = 3
+BUS_TIMES = 3
+
+
+def tfl_params() -> dict:
+    key = env("TFL_APP_KEY")
+    return {"app_key": key} if key else {}
+
+
+def tfl_stop_id(code: str) -> str:
+    """A NaPTAN id as is; a 5-digit SMS code looked up once, then cached."""
+    if not re.fullmatch(r"\d{5}", code):
+        return code
+
+    def lookup():
+        r = session.get(f"{TFL_API}/StopPoint/Sms/{code}", params=tfl_params(), timeout=HTTP_TIMEOUT)
+        r.raise_for_status()
+        body = r.json()
+        found = body.get("naptanId") or body.get("id")
+        if not found:
+            raise ValueError(f"no stop for code {code}")
+        return found
+
+    return cache.get(f"tfl-sms:{code}", 7 * 86400, lookup)
+
+
+def bus_rows(arrivals: list[dict], lines: set[str]) -> list[dict]:
+    """Arrivals from one or more stops -> rows of (line, destination) with
+    their next few times in minutes, soonest row first."""
+    groups: dict[tuple[str, str], list[int]] = {}
+    for a in arrivals:
+        line = str(a.get("lineName") or a.get("lineId") or "").upper()
+        if lines and line not in lines:
+            continue
+        secs = a.get("timeToStation")
+        if not isinstance(secs, (int, float)):
+            continue
+        dest = clean(a.get("destinationName") or a.get("towards") or "", 16)
+        groups.setdefault((line, dest), []).append(max(0, int(secs // 60)))
+    rows = [{"line": clean(line, 4), "dest": dest, "mins": sorted(mins)[:BUS_TIMES]}
+            for (line, dest), mins in groups.items()]
+    rows.sort(key=lambda r: (r["mins"][0], r["line"]))
+    return rows[:BUS_ROWS]
+
+
+def fetch_bus() -> dict:
+    stops = env_list("TFL_STOPS")
+    if not stops:
+        return {"ok": False, "setup": False, "error": "not configured", "rows": []}
+    lines = {l.upper() for l in env_list("TFL_LINES")}
+    arrivals, label = [], ""
+    for entry in stops[:3]:
+        code, _, name = entry.partition("=")
+        label = label or name.strip()
+        try:
+            stop = tfl_stop_id(code.strip())
+            r = session.get(f"{TFL_API}/StopPoint/{stop}/Arrivals", params=tfl_params(), timeout=HTTP_TIMEOUT)
+            r.raise_for_status()
+            arrivals.extend(r.json())
+        except (requests.RequestException, ValueError) as e:
+            return {"ok": False, "setup": True, "error": f"tfl: {type(e).__name__}", "rows": []}
+    return {"ok": True, "setup": True, "stop": clean(label, 20), "at": int(time.time()),
+            "rows": bus_rows(arrivals, lines)}
+
+
+# ── Fantasy Premier League ────────────────────────────────
+# FPL_TEAM_ID: the number in your Points page address,
+# fantasy.premierleague.com/entry/1234567/event/9 -> 1234567.
+
+FPL_API = "https://fantasy.premierleague.com/api"
+
+
+def fpl_get(path: str, ttl: float):
+    def load():
+        r = session.get(f"{FPL_API}/{path}", timeout=HTTP_TIMEOUT * 2,
+                        headers={"User-Agent": "Mozilla/5.0 buddy-bridge"})
+        r.raise_for_status()
+        return r.json()
+    return cache.get(f"fpl:{path}", ttl, load)
+
+
+def fpl_epoch(iso: str | None) -> int:
+    if not iso:
+        return 0
+    return int(datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp())
+
+
+def fpl_live_points(picks: dict, live: dict) -> int:
+    """Gameweek points so far: each starter's live points times its multiplier
+    (captain 2, triple captain 3, bench 0), minus transfer hits."""
+    points = {e["id"]: (e.get("stats") or {}).get("total_points", 0) for e in live.get("elements", [])}
+    total = sum(points.get(p["element"], 0) * p.get("multiplier", 0) for p in picks.get("picks", []))
+    return total - ((picks.get("entry_history") or {}).get("event_transfers_cost") or 0)
+
+
+def fetch_fpl() -> dict:
+    team = env("FPL_TEAM_ID")
+    if not team.isdigit():
+        return {"ok": False, "setup": False, "error": "not configured"}
+    boot = fpl_get("bootstrap-static/", 600)
+    events = boot.get("events", [])
+    current = next((e for e in events if e.get("is_current")), None)
+    upcoming = next((e for e in events if e.get("is_next")), None)
+    entry = fpl_get(f"entry/{team}/", 300)
+    out = {"ok": True, "setup": True, "team": clean(entry.get("name", ""), 20),
+           "total": entry.get("summary_overall_points") or 0,
+           "rank": entry.get("summary_overall_rank") or 0,
+           "gw": 0, "gw_points": 0, "live": False, "next_gw": 0, "deadline": 0}
+    if upcoming:
+        out["next_gw"] = upcoming["id"]
+        out["deadline"] = fpl_epoch(upcoming.get("deadline_time"))
+    if current:
+        gw = current["id"]
+        out["gw"] = gw
+        out["gw_points"] = entry.get("summary_event_points") or 0
+        # Matches still to settle: count live points from the players' stats.
+        if not current.get("data_checked"):
+            try:
+                picks = fpl_get(f"entry/{team}/event/{gw}/picks/", 600)
+                live = fpl_get(f"event/{gw}/live/", 60)
+                out["gw_points"] = fpl_live_points(picks, live)
+                out["live"] = not current.get("finished", False)
+            except requests.RequestException:
+                pass   # fall back to the entry summary
+    return out
+
+
+# ── MiSTer now playing (Zaparoo Core) ─────────────────────
+# MISTER_URL: the MiSTer running Zaparoo, e.g. http://192.168.86.60:7497
+
+def fetch_mister() -> dict:
+    url = env("MISTER_URL").rstrip("/")
+    if not url:
+        return {"ok": False, "setup": False, "error": "not configured"}
+    try:
+        r = session.post(f"{url}/api/v0.1", timeout=HTTP_TIMEOUT,
+                         json={"jsonrpc": "2.0", "id": secrets.token_hex(4), "method": "media"})
+        r.raise_for_status()
+        body = r.json()
+    except requests.ConnectionError:
+        # Switched off or asleep: a normal state, not an error.
+        return {"ok": True, "setup": True, "online": False, "playing": False,
+                "system": "", "game": "", "started": 0}
+    if "error" in body:
+        return {"ok": False, "setup": True, "error": "zaparoo: " + clean((body["error"] or {}).get("message", "error"), 30)}
+    active = [a for a in ((body.get("result") or {}).get("active") or [])
+              if a.get("slot", "primary") == "primary"]
+    if not active:
+        return {"ok": True, "setup": True, "online": True, "playing": False,
+                "system": "", "game": "", "started": 0}
+    a = active[0]
+    started = 0
+    try:
+        started = int(datetime.fromisoformat(str(a.get("started", "")).replace("Z", "+00:00")).timestamp())
+    except ValueError:
+        pass
+    return {"ok": True, "setup": True, "online": True, "playing": True,
+            "system": clean(a.get("systemName") or a.get("systemId"), 20),
+            "game": clean(a.get("mediaName") or a.get("mediaPath", "").rsplit("/", 1)[-1]),
+            "started": started}
+
+
 # ── HTTP ──────────────────────────────────────────────────
 
 def authorised() -> bool:
@@ -483,7 +653,9 @@ def health():
             "ha": bool(env("HA_URL") and env("HA_TOKEN") and ha_entities()),
             "now": [s for s in now_sources() if _source_configured(s)],
             "cal": len(env_list("CAL_ICS_URLS")),
-            "spotify_linked": bool(spotify_refresh_token())}
+            "spotify_linked": bool(spotify_refresh_token()),
+            "bus": len(env_list("TFL_STOPS")), "fpl": env("FPL_TEAM_ID").isdigit(),
+            "mister": bool(env("MISTER_URL"))}
 
 
 def _source_configured(name: str) -> bool:
@@ -508,13 +680,31 @@ def api_cal():
     return jsonify(cache.get(f"cal:{h12}", 60, lambda: _safe(lambda: fetch_cal(h12))))
 
 
+@app.get("/api/bus")
+def api_bus():
+    return jsonify(cache.get("bus", 15, lambda: _safe(fetch_bus)))
+
+
+@app.get("/api/fpl")
+def api_fpl():
+    return jsonify(cache.get("fpl", 60, lambda: _safe(fetch_fpl)))
+
+
+@app.get("/api/mister")
+def api_mister():
+    return jsonify(cache.get("mister", 5, lambda: _safe(fetch_mister)))
+
+
 @app.get("/api/summary")
 def api_summary():
     h12 = request.args.get("fmt") == "12"
     return jsonify({"ok": True,
                     "ha": cache.get("ha", 20, lambda: _safe(fetch_ha)),
                     "now": cache.get("now", 3, lambda: _safe(fetch_now)),
-                    "cal": cache.get(f"cal:{h12}", 60, lambda: _safe(lambda: fetch_cal(h12)))})
+                    "cal": cache.get(f"cal:{h12}", 60, lambda: _safe(lambda: fetch_cal(h12))),
+                    "bus": cache.get("bus", 15, lambda: _safe(fetch_bus)),
+                    "fpl": cache.get("fpl", 60, lambda: _safe(fetch_fpl)),
+                    "mister": cache.get("mister", 5, lambda: _safe(fetch_mister))})
 
 
 _spotify_states: dict[str, float] = {}
