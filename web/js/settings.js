@@ -10,7 +10,7 @@
 export const KEYS = ["mount", "theme", "github_user", "tz_name", "tz_rule", "ticker",
   "stock_key", "lat", "lon", "temp_unit", "wind_unit", "pages",
   "bridge_url", "bridge_key", "page_secs", "auto_page", "clock_format",
-  "night_from", "night_to", "night_level", "brightness"];
+  "night_from", "night_to", "night_level", "brightness", "now_follow"];
 export const PAGE_KEYS = ["face", "clock", "date", "weather", "moon", "stock", "github", "ha", "now", "cal",
   "bus", "fpl", "mister"];
 // The pages that come from the bridge: hidden while bridge_url is empty.
@@ -86,7 +86,7 @@ function keyError(key, v) {
     case "wind_unit": return choiceError(v, "kmh", "mph", 'must be "kmh" or "mph"');
     case "bridge_url": return urlError(v);
     case "clock_format": return choiceError(v, "24h", "12h", 'must be "24h" or "12h"');
-    case "auto_page": return typeof v === "boolean" ? null : "must be true or false";
+    case "auto_page": case "now_follow": return typeof v === "boolean" ? null : "must be true or false";
     case "page_secs": return intError(v, 3, 120, "must be a whole number 3-120");
     case "night_from": return intError(v, -1, 23, "must be a whole number -1 (off) to 23");
     case "night_to": return intError(v, 0, 23, "must be a whole number 0-23");

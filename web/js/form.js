@@ -34,6 +34,7 @@ export const DEFAULTS = Object.freeze({
   night_to: 7,
   night_level: 20,
   brightness: 70,
+  now_follow: true,
 });
 
 // Flows, as spec §4. flash: the flow writes firmware; erase: it erases first.
@@ -268,6 +269,7 @@ export function previewPageFor(key, config) {
     case "github_user": case "check.github": return "github";
     case "clock_format": return "clock";
     case "brightness": return "stay";
+    case "now_follow": return "now";
     case "bridge_url": case "bridge_key": case "check.bridge": {
       const shown = pageList(config);
       return ["now", "ha", "cal", "bus", "fpl", "mister"].find((p) => shown.includes(p)) || "stay";

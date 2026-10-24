@@ -130,3 +130,6 @@
 // BRIGHTNESS    Screen brightness at first start, 5-100 %. Swipe up or
 //               down on the screen to change it any time.
 #define BRIGHTNESS    70
+// NOW_FOLLOW    true: jump to Now playing when music starts, and back to the
+//               first page when it stops.
+#define NOW_FOLLOW    true

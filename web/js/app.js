@@ -1148,6 +1148,8 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
           options: [["24h", S.form.clock24], ["12h", S.form.clock12]], set: (v) => { f.config.clock_format = v; } })),
       brightness,
       autoPage,
+      switchRow({ label: S.form.nowFollow, help: "now_follow", checked: f.config.now_follow !== false,
+        badgeKey: "now_follow", errorKey: "now_follow", set: (v) => { f.config.now_follow = v; } }).el,
       h("fieldset", { class: "field subgroup" }, h("legend", {}, S.form.night),
         h("div", { class: "grid-2" }, nightFrom.el, nightTo.el), nightLevel.el)));
     refreshers.push(() => {

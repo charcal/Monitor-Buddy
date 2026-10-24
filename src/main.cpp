@@ -193,6 +193,9 @@
 #ifndef BRIGHTNESS
   #define BRIGHTNESS 70
 #endif
+#ifndef NOW_FOLLOW
+  #define NOW_FOLLOW true
+#endif
 
 // OTHER CONFIGURATION ----> EDIT ONLY IF NECESSARY
 
@@ -269,6 +272,10 @@ static constexpr uint32_t HA_REFRESH_SHOWN_MS   = 20UL * 1000UL;
 static constexpr uint32_t HA_REFRESH_BG_MS      = 2UL * 60UL * 1000UL;
 static constexpr uint32_t NOW_REFRESH_SHOWN_MS  = 5UL * 1000UL;
 static constexpr uint32_t NOW_REFRESH_BG_MS     = 60UL * 1000UL;
+// now_follow: how long playback must have stopped before going back home.
+// Short for a stop (the gap between tracks is a few seconds), long for a pause.
+static constexpr uint32_t NOW_STOP_GRACE_MS     = 15UL * 1000UL;
+static constexpr uint32_t NOW_PAUSE_GRACE_MS    = 2UL * 60UL * 1000UL;
 static constexpr uint32_t CAL_REFRESH_MS        = 5UL * 60UL * 1000UL;
 static constexpr uint32_t BUS_REFRESH_SHOWN_MS  = 20UL * 1000UL;
 static constexpr uint32_t BUS_REFRESH_BG_MS     = 90UL * 1000UL;
@@ -397,6 +404,7 @@ void readSensors();
 void readTouch();
 void updateFaceTimers();
 void updateAutoPage();
+void followNowPlaying();
 void calibrateNeutral();
 void loadDisplaySettings();
 Settings defaultsFromConfig();
@@ -1092,12 +1100,31 @@ void buildPageList() {
 }
 
 // Move to the next/previous ENABLED page (wraps around the enabled list).
+// True while now_follow has put the Now playing page up for music that is
+// still playing: auto-advance waits, and the stop sends it home. Any other
+// page change (a swipe, a tap) ends it.
+bool nowHolding = false;
+
 void switchApp(int8_t delta) {
   if (pageCount == 0) return;
   currentPageIdx = (currentPageIdx + pageCount + delta) % pageCount;
   currentApp = pageOrder[currentPageIdx];
   pressPulse = 1.0f;
   nextAutoPage = millis() + pageIntervalMs();
+  nowHolding = false;
+}
+
+// Show page `id` if it is in the page list. False when it isn't shown.
+bool goToPage(uint8_t id) {
+  for (uint8_t i = 0; i < pageCount; i++) {
+    if (pageOrder[i] != id) continue;
+    currentPageIdx = i;
+    currentApp = id;
+    pressPulse = 1.0f;
+    nextAutoPage = millis() + pageIntervalMs();
+    return true;
+  }
+  return false;
 }
 
 // settings.pageSecs, the auto-advance interval.
@@ -2562,6 +2589,7 @@ Settings defaultsFromConfig() {
   d.nightTo    = (uint8_t)constrain(NIGHT_TO, 0, 23);
   d.nightLevel = (uint8_t)constrain(NIGHT_LEVEL, 0, 100);
   d.brightness = (uint8_t)constrain(BRIGHTNESS, 5, 100);
+  d.nowFollow  = NOW_FOLLOW;
   return d;
 }
 
@@ -3045,7 +3073,39 @@ void updateFaceTimers() {
 }
 
 void updateAutoPage() {
+  if (nowHolding) { nextAutoPage = millis() + pageIntervalMs(); return; }   // stay while it plays
   if (autoPageEnabled && millis() > nextAutoPage) switchApp(1);
+}
+
+// now_follow: music starting brings up the Now playing page; music stopping
+// (after a grace period) goes back to the first page, but only if the page is
+// still the one it brought up. Runs every frame on netView.
+void followNowPlaying() {
+  static bool     wasPlaying   = false;
+  static uint32_t stoppedSince = 0;
+  if (!settings.nowFollow || !settings.pages[PAGE_NOW] || !bridgeConfigured()) {
+    nowHolding = false;
+    return;
+  }
+  const NowData &n = netView.now;
+  if (!n.valid) return;
+  if (n.playing) {
+    stoppedSince = 0;
+    if (!wasPlaying && goToPage(PAGE_NOW)) {
+      nowHolding = true;
+      Serial.println("now_follow: music started, showing Now playing");
+    }
+  } else if (nowHolding) {
+    if (stoppedSince == 0) stoppedSince = millis();
+    uint32_t grace = n.paused ? NOW_PAUSE_GRACE_MS : NOW_STOP_GRACE_MS;
+    if (millis() - stoppedSince >= grace) {
+      nowHolding = false;
+      stoppedSince = 0;
+      if (currentApp == PAGE_NOW && pageCount) goToPage(pageOrder[0]);
+      Serial.println("now_follow: music stopped, back to the first page");
+    }
+  }
+  wasPlaying = n.playing;
 }
 
 // Returns the current clock hour (0-23) derived from the running clock.
@@ -3130,7 +3190,8 @@ void netTask(void *) {
       ran = usedTls = true;
     } else if (bridge && settings.pages[PAGE_NOW]
         && stale(netShared.now.valid, netShared.now.updatedAt, now,
-                 shown == PAGE_NOW ? NOW_REFRESH_SHOWN_MS : NOW_REFRESH_BG_MS)
+                 // now_follow needs to notice music starting from any page.
+                 shown == PAGE_NOW || settings.nowFollow ? NOW_REFRESH_SHOWN_MS : NOW_REFRESH_BG_MS)
         && nowPacer.ready(now)) {
       runFetch("now", fetchNow, nowPacer, now, 0, FETCH_RETRY_MS);
       ran = true;
@@ -3398,6 +3459,7 @@ void loop() {
   }
 
   snapshotNetData();
+  followNowPlaying();
   switch (currentApp) {
     case 0: drawFace(tx, ty); break;
     case 1: drawClock();      break;
