@@ -244,7 +244,9 @@ def fpl_fake(monkeypatch, bridge, *, finished, data_checked):
             {"id": 9, "is_current": True, "finished": finished, "data_checked": data_checked},
             {"id": 10, "is_next": True, "deadline_time": "2026-10-31T18:30:00Z"}]},
         "entry/1234567/": {"name": "Cal's Calamity XI", "summary_overall_points": 512,
-                           "summary_overall_rank": 845210, "summary_event_points": 48},
+                           "summary_overall_rank": 845210, "summary_event_points": 48,
+                           "leagues": {"classic": [{"id": 314, "name": "Overall", "entry_rank": 845210},
+                                                   {"id": 797425, "name": "The Office League", "entry_rank": 3}]}},
         "entry/1234567/event/9/picks/": {"entry_history": {"event_transfers_cost": 4},
                                          "picks": [{"element": 1, "multiplier": 2}, {"element": 2, "multiplier": 1},
                                                    {"element": 3, "multiplier": 0}]},
@@ -323,3 +325,15 @@ def test_bus_routes_per_stop(bridge, monkeypatch):
     out = bridge.fetch_bus()
     assert out["stop"] == "MEMORIAL HOSPITAL"
     assert [(r["line"], r["dest"]) for r in out["rows"]] == [("89", "LEWISHAM"), ("244", "WOOLWICH")]
+
+
+def test_fpl_rank_from_league(bridge, monkeypatch):
+    monkeypatch.setenv("FPL_TEAM_ID", "1234567")
+    monkeypatch.setenv("FPL_LEAGUE_ID", "797425")
+    fpl_fake(monkeypatch, bridge, finished=True, data_checked=True)
+    out = bridge.fetch_fpl()
+    assert out["rank"] == 3 and out["league"] == "THE OFFICE LEAGUE"
+    monkeypatch.setenv("FPL_LEAGUE_ID", "999")          # not one of your leagues: overall rank
+    bridge.cache._data.clear()
+    out = bridge.fetch_fpl()
+    assert out["rank"] == 845210 and out["league"] == "OVERALL"

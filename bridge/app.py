@@ -528,6 +528,8 @@ def fetch_bus() -> dict:
 # ── Fantasy Premier League ────────────────────────────────
 # FPL_TEAM_ID: the number in your Points page address,
 # fantasy.premierleague.com/entry/1234567/event/9 -> 1234567.
+# FPL_LEAGUE_ID (optional): a classic league to take the rank from,
+# fantasy.premierleague.com/leagues/797425/standings/c -> 797425.
 
 FPL_API = "https://fantasy.premierleague.com/api"
 
@@ -567,7 +569,17 @@ def fetch_fpl() -> dict:
     out = {"ok": True, "setup": True, "team": clean(entry.get("name", ""), 20),
            "total": entry.get("summary_overall_points") or 0,
            "rank": entry.get("summary_overall_rank") or 0,
-           "gw": 0, "gw_points": 0, "live": False, "next_gw": 0, "deadline": 0}
+           "gw": 0, "gw_points": 0, "live": False, "next_gw": 0, "deadline": 0,
+           "league": "OVERALL"}
+    # FPL_LEAGUE_ID: show your rank in that classic league instead. The entry
+    # already lists your leagues with your rank in each, so no extra request.
+    league_id = env("FPL_LEAGUE_ID")
+    if league_id.isdigit():
+        league = next((l for l in (entry.get("leagues") or {}).get("classic", [])
+                       if str(l.get("id")) == league_id), None)
+        if league and league.get("entry_rank"):
+            out["rank"] = league["entry_rank"]
+            out["league"] = clean(league.get("name", ""), 20)
     if upcoming:
         out["next_gw"] = upcoming["id"]
         out["deadline"] = fpl_epoch(upcoming.get("deadline_time"))
