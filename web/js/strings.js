@@ -38,6 +38,7 @@ export const S = {
     bus: "Next bus",
     fpl: "Fantasy PL",
     mister: "MiSTer",
+    news: "News",
   },
   previewSample: "sample values",
   previewLive: "live from the bridge",
@@ -71,7 +72,7 @@ export const S = {
 
   about: {
     heading: "What this is",
-    body: "Monitor Buddy is a little screen that sits on the edge of your monitor: an animated face, plus clock, date, weather, moon, stock and GitHub pages, and Home, Now playing, Calendar, Next bus, Fantasy PL and MiSTer pages from your home server. This page installs its firmware and sets it up over USB, right in the browser.",
+    body: "Monitor Buddy is a little screen that sits on the edge of your monitor: an animated face, plus clock, date, weather, moon, stock and GitHub pages, and Home, Now playing, Calendar, Next bus, Fantasy PL, MiSTer and News pages from your home server. This page installs its firmware and sets it up over USB, right in the browser.",
     privacy: "Your settings go straight to the Buddy. Nothing is stored in this browser, and the only outside requests are the city search and the checks you press.",
     project: "Project on GitHub",
     projectUrl: "https://github.com/IdefixRC/Monitor-Buddy",
@@ -262,7 +263,7 @@ export const S = {
     allOff: "With every page off, I keep the face on so the screen is never empty.",
     stockHidden: "The stock page stays hidden while the Finnhub key is empty.",
     githubHidden: "The GitHub page stays hidden while the username is empty.",
-    bridgeHidden: "Home, Now playing, Calendar, Next bus, Fantasy PL and MiSTer stay hidden until you set the bridge address under Home server.",
+    bridgeHidden: "Home, Now playing, Calendar, Next bus, Fantasy PL, MiSTer and News stay hidden until you set the bridge address under Home server.",
 
     ticker: "Stock ticker",
     stockKey: "Finnhub API key",
@@ -436,6 +437,8 @@ export const S = {
       misterIdle: "MiSTer idle",
       misterOff: "MiSTer off",
       misterNotSet: "MiSTer not set up",
+      news: (n) => count(n, "headline", "headlines"),
+      newsError: "news feed not answering",
       bad_key: "The bridge refused the key. Check it matches BUDDY_KEY.",
       not_here: "There's no bridge next to this page, so I can't check it from here. The Buddy will still use the address you entered.",
       network: "Couldn't reach the bridge.",

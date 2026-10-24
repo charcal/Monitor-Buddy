@@ -1,7 +1,7 @@
 // The bridge pages, the bridge check and the settings added in version 2.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { pageList, calHeading, sampleCal, SAMPLE_HA, fplCountdown } from "../web/js/preview.js";
+import { pageList, calHeading, sampleCal, SAMPLE_HA, fplCountdown, wrapLines, newsAge } from "../web/js/preview.js";
 import { checkBridge, BRIDGE_PATH } from "../web/js/checks.js";
 import { bridgeMessage, previewPageFor, redactLog, DEFAULTS } from "../web/js/form.js";
 import { parseConfigH } from "../web/js/configh.js";
@@ -11,10 +11,10 @@ const zones = JSON.parse(readFileSync(new URL("../web/vendor/posix_tz_db/zones.j
 const on = { ...DEFAULTS, pages: { ...DEFAULTS.pages } };
 
 test("the bridge pages hide while bridge_url is empty, like buildPageList", () => {
-  const bridgePages = ["ha", "now", "cal", "bus", "fpl", "mister"];
+  const bridgePages = ["ha", "now", "cal", "bus", "fpl", "mister", "news"];
   assert.deepEqual(pageList({ ...on, bridge_url: "" }).filter((p) => bridgePages.includes(p)), []);
   const withBridge = pageList({ ...on, bridge_url: "http://10.0.0.2:8787" });
-  assert.deepEqual(withBridge.slice(-6), bridgePages);
+  assert.deepEqual(withBridge.slice(-bridgePages.length), bridgePages);
   const noNow = pageList({ ...on, bridge_url: "http://10.0.0.2:8787", pages: { ...on.pages, now: false } });
   assert.ok(!noNow.includes("now") && noNow.includes("cal"));
 });
@@ -114,4 +114,16 @@ test("clock_date puts the date under the clock and hides the Date page", () => {
   assert.ok(pageList({ ...base, clock_date: false }).includes("date"));
   // With the clock page off, the Date page stays: the date has nowhere else to go.
   assert.ok(pageList({ ...base, clock_date: true, pages: { ...base.pages, clock: false } }).includes("date"));
+});
+
+test("news: word wrap mirrors drawWrapped, ages read naturally", () => {
+  assert.deepEqual(wrapLines("NEW ROUTEMASTER BUSES TO RETURN TO SOUTH EAST LONDON ROUTES", 24, 5),
+    ["NEW ROUTEMASTER BUSES TO", "RETURN TO SOUTH EAST", "LONDON ROUTES"]);
+  assert.deepEqual(wrapLines("ONE TWO THREE FOUR FIVE SIX SEVEN", 10, 2), ["ONE TWO", "THREE FO.."]);
+  assert.deepEqual(wrapLines("SUPERCALIFRAGILISTIC", 8, 3), ["SUPERCAL", "IFRAGILI", "STIC"]);
+  assert.equal(newsAge(0), "NOW");
+  assert.equal(newsAge(25), "25M AGO");
+  assert.equal(newsAge(140), "2H AGO");
+  assert.equal(newsAge(3000), "2D AGO");
+  assert.equal(newsAge(-1), "");
 });

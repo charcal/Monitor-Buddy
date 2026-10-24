@@ -101,6 +101,7 @@
 #define SHOW_CAL      true   // next calendar events (needs BRIDGE_URL)
 #define SHOW_BUS      true   // next buses at your stop (needs BRIDGE_URL)
 #define SHOW_FPL      true   // Fantasy Premier League points (needs BRIDGE_URL)
+#define SHOW_NEWS     true   // news headlines, BBC News by default (needs BRIDGE_URL)
 #define SHOW_MISTER   true   // what's running on the MiSTer (needs BRIDGE_URL)
 
 // ── Home server bridge ──────────────────────────────────────

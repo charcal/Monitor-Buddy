@@ -24,7 +24,7 @@ export const DEFAULTS = Object.freeze({
   temp_unit: "celsius",
   wind_unit: "kmh",
   pages: Object.freeze({ face: true, clock: true, date: true, weather: true, moon: true, stock: true, github: true,
-    ha: true, now: true, cal: true, bus: true, fpl: true, mister: true }),
+    ha: true, now: true, cal: true, bus: true, fpl: true, mister: true, news: true }),
   bridge_url: "",
   bridge_key: "",
   page_secs: 8,
@@ -229,6 +229,8 @@ export function bridgeMessage(res) {
   const { bus, fpl, mister } = res.summary || {};
   if (bus) parts.push(bus.ok ? B.bus((bus.rows || []).length) : bus.setup === false ? B.busOff : B.busError);
   if (fpl) parts.push(fpl.ok ? B.fpl(fpl.gw_points ?? 0) : fpl.setup === false ? B.fplOff : B.fplError);
+  const { news } = res.summary || {};
+  if (news) parts.push(news.ok ? B.news((news.items || []).length) : B.newsError);
   if (mister) {
     parts.push(!mister.ok ? (mister.setup === false ? B.misterNotSet : B.misterOff)
       : mister.playing ? B.misterGame(mister.game || "?") : mister.online ? B.misterIdle : B.misterOff);
@@ -253,7 +255,7 @@ export function locationSummary(config, placeLabel = "") {
 // The pages that show the theme's colours, in the order a theme change tries
 // them (Eric, 2026-10-12): the face never uses the theme.
 export const THEMED_PAGES = Object.freeze(["clock", "date", "weather", "moon", "stock", "github", "ha", "now", "cal",
-  "bus", "fpl", "mister"]);
+  "bus", "fpl", "mister", "news"]);
 
 // The preview page a changed setting belongs to, so the preview can jump
 // there (GUI review, Eric 2026-10-12): a page key, "stay" (hold the current
@@ -273,7 +275,7 @@ export function previewPageFor(key, config) {
     case "now_follow": return "now";
     case "bridge_url": case "bridge_key": case "check.bridge": {
       const shown = pageList(config);
-      return ["now", "ha", "cal", "bus", "fpl", "mister"].find((p) => shown.includes(p)) || "stay";
+      return ["now", "ha", "cal", "bus", "fpl", "mister", "news"].find((p) => shown.includes(p)) || "stay";
     }
     case "mount": return "face";
     case "theme": {

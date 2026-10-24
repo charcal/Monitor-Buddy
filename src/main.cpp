@@ -166,6 +166,9 @@
 #ifndef SHOW_MISTER
   #define SHOW_MISTER true
 #endif
+#ifndef SHOW_NEWS
+  #define SHOW_NEWS true
+#endif
 #ifndef BRIDGE_URL
   #define BRIDGE_URL ""
 #endif
@@ -287,14 +290,16 @@ static constexpr uint32_t FPL_REFRESH_SHOWN_MS  = 60UL * 1000UL;
 static constexpr uint32_t FPL_REFRESH_BG_MS     = 10UL * 60UL * 1000UL;
 static constexpr uint32_t MISTER_REFRESH_SHOWN_MS = 10UL * 1000UL;
 static constexpr uint32_t MISTER_REFRESH_BG_MS    = 60UL * 1000UL;
+static constexpr uint32_t NEWS_REFRESH_MS         = 10UL * 60UL * 1000UL;
+static constexpr uint32_t NEWS_ROTATE_MS          = 6000UL;   // each headline on screen
 // A touch while the backlight is off at night wakes it for this long.
 static constexpr uint32_t NIGHT_WAKE_MS         = 30UL * 1000UL;
 
 // Background fetch task. Stack sized from the measured high-water mark: an
 // HTTPS fetch used about 3.3 KB of the original 12 KB, plus a 3 KB margin.
 // If "[net] ... stack free" ever drops below 2048 bytes, raise this.
-// The bridge fetches added ~0.5 KB of locals (CalData, HTTPClient), hence 8 KB.
-static constexpr uint32_t    NET_TASK_STACK_BYTES = 8192;
+// The bridge fetches added locals (CalData, NewsData ~0.9 KB, HTTPClient), hence 9 KB.
+static constexpr uint32_t    NET_TASK_STACK_BYTES = 9216;
 static constexpr UBaseType_t NET_TASK_PRIORITY    = 1;     // same as loop()
 static constexpr uint32_t    NET_HEALTH_LOG_MS    = 5UL * 60UL * 1000UL;
 
@@ -378,12 +383,14 @@ bool fetchCal();
 bool fetchBus();
 bool fetchFpl();
 bool fetchMister();
+bool fetchNews();
 void drawHa();
 void drawNow();
 void drawCal();
 void drawBus();
 void drawFpl();
 void drawMister();
+void drawNews();
 uint32_t pageIntervalMs();
 void applyBacklight();
 bool nightNow();
@@ -674,7 +681,7 @@ bool bsp_touch_get_coordinates(uint16_t *outX, uint16_t *outY) {
 
 static const int SCREEN_W         = 320;
 static const int SCREEN_H         = 172;
-static const uint8_t APP_COUNT    = 13;  // total number of pages defined
+static const uint8_t APP_COUNT    = 14;  // total number of pages defined
 
 // Page identifiers, in fixed display order. These index the render switch in
 // loop(); which are actually shown is decided by settings.pages.
@@ -691,6 +698,7 @@ static constexpr uint8_t PAGE_CAL     = 9;   // next calendar events, from the b
 static constexpr uint8_t PAGE_BUS     = 10;  // next buses (TfL), from the bridge
 static constexpr uint8_t PAGE_FPL     = 11;  // Fantasy Premier League, from the bridge
 static constexpr uint8_t PAGE_MISTER  = 12;  // what's running on the MiSTer, from the bridge
+static constexpr uint8_t PAGE_NEWS    = 13;  // news headlines, from the bridge
 
 // -- Face expressions (ported from DESKBUDDY-1.0, Edison Science Corner) --
 // 9 moods, cycled by single-tapping the face page. A fast spin of the board
@@ -726,7 +734,7 @@ bool settingsStored = false;   // booted from a readable /config.json; GET "stor
 static_assert(PAGE_FACE == 0 && PAGE_CLOCK == 1 && PAGE_DATE == 2 &&
               PAGE_WEATHER == 3 && PAGE_MOON == 4 && PAGE_STOCK == 5 &&
               PAGE_GITHUB == 6 && PAGE_HA == 7 && PAGE_NOW == 8 && PAGE_CAL == 9 &&
-              PAGE_BUS == 10 && PAGE_FPL == 11 && PAGE_MISTER == 12,
+              PAGE_BUS == 10 && PAGE_FPL == 11 && PAGE_MISTER == 12 && PAGE_NEWS == 13,
               "settings.pages[] is indexed by PAGE_* ids");
 static_assert(SETTINGS_PAGE_COUNT == APP_COUNT,
               "settings.pages[] needs one entry per page");
@@ -819,8 +827,11 @@ struct FplData     { bool valid, setup, live; char team[21]; int gw, gwPoints, n
                      int32_t total, rank; int64_t deadline; uint32_t updatedAt; };
 struct MisterData  { bool valid, setup, online, playing; char system[21]; char game[44];
                      int64_t started; uint32_t updatedAt; };
+struct NewsItem    { char title[92]; char source[16]; int32_t ageMin; };
+struct NewsData    { bool valid, setup; uint8_t count; NewsItem items[8]; uint32_t updatedAt; };
 struct NetData     { WeatherData weather; StockData stock; GithubData github;
-                     HaData ha; NowData now; CalData cal; BusData bus; FplData fpl; MisterData mister; };
+                     HaData ha; NowData now; CalData cal; BusData bus; FplData fpl; MisterData mister;
+                     NewsData news; };
 
 NetData           netShared = {};
 NetData           netView   = {};
@@ -1096,7 +1107,7 @@ void buildPageList() {
     if (i == PAGE_GITHUB && !githubConfigured()) continue;  // "" hides the page
     if (i == PAGE_DATE && settings.clockDate && settings.pages[PAGE_CLOCK]) continue;  // on the clock page
     if (i == PAGE_STOCK && !stockConfigured()) continue;    // no key hides the page
-    if (i >= PAGE_HA && i <= PAGE_MISTER && !bridgeConfigured()) continue;   // the bridge pages
+    if (i >= PAGE_HA && i <= PAGE_NEWS && !bridgeConfigured()) continue;   // the bridge pages
     pageOrder[pageCount++] = i;
   }
   if (pageCount == 0) pageOrder[pageCount++] = PAGE_FACE;  // never leave it empty
@@ -1528,6 +1539,25 @@ bool fetchFpl() {
   f.updatedAt = millis();
   f.valid     = true;
   publishNetData(netShared.fpl, f);
+  return true;
+}
+
+bool fetchNews() {
+  JsonDocument doc;
+  if (!bridgeGet("/api/news", doc)) return false;
+  NewsData d = {};
+  d.setup = !bridgeNotSetUp(doc);
+  if (d.setup && !(doc["ok"] | false)) return false;
+  for (JsonObjectConst it : doc["items"].as<JsonArrayConst>()) {
+    if (d.count >= 8) break;
+    NewsItem &n = d.items[d.count++];
+    copyText(n.title,  sizeof(n.title),  it["title"] | "");
+    copyText(n.source, sizeof(n.source), it["source"] | "");
+    n.ageMin = it["age_min"] | -1;
+  }
+  d.updatedAt = millis();
+  d.valid     = true;
+  publishNetData(netShared.news, d);
   return true;
 }
 
@@ -2473,6 +2503,72 @@ void drawFpl() {
   drawPageDots();
 }
 
+// ── News page ─────────────────────────────────────────────
+// One headline at a time, word-wrapped, moving on every NEWS_ROTATE_MS.
+
+// "NOW", "12M AGO", "3H AGO", "2D AGO"; "" when the feed gave no time.
+static void newsAge(char *out, size_t size, int32_t mins) {
+  if (mins < 0) { out[0] = '\0'; return; }
+  if (mins < 2)          snprintf(out, size, "NOW");
+  else if (mins < 60)    snprintf(out, size, "%ldM AGO", (long)mins);
+  else if (mins < 1440)  snprintf(out, size, "%ldH AGO", (long)(mins / 60));
+  else                   snprintf(out, size, "%ldD AGO", (long)(mins / 1440));
+}
+
+// Word-wraps `text` into lines of at most `cols` characters, drawing at most
+// `maxLines` (the last one ends in ".." when text is left over).
+static void drawWrapped(const char *text, int x, int y, uint8_t size, int cols, int maxLines,
+                        uint16_t color) {
+  const int lineH = 8 * size + 4;
+  const char *p = text;
+  for (int line = 0; line < maxLines && *p; line++) {
+    while (*p == ' ') p++;
+    int n = (int)strlen(p);
+    int take = n;
+    if (n > cols) {
+      take = cols;
+      while (take > 0 && p[take] != ' ') take--;   // break at the last space that fits
+      if (take == 0) take = cols;                  // one very long word
+    }
+    char buf[64];
+    int len = take < (int)sizeof(buf) - 3 ? take : (int)sizeof(buf) - 3;
+    memcpy(buf, p, len);
+    buf[len] = '\0';
+    if (line == maxLines - 1 && p[take] != '\0') {   // out of room: mark the cut
+      while (len > 0 && buf[len - 1] == ' ') len--;
+      if (len > cols - 2) len = cols - 2;
+      buf[len] = '.'; buf[len + 1] = '.'; buf[len + 2] = '\0';
+    }
+    textAt(buf, x, y + line * lineH, size, color);
+    p += take;
+  }
+}
+
+void drawNews() {
+  gfx->fillScreen(BG);
+  const NewsData &d = netView.news;
+  if (drawBridgeGate(d.valid, d.setup, "NEWS")) return;
+  if (d.count == 0) { centeredText("NO HEADLINES", 66, 3); drawPageDots(); return; }
+  uint8_t i = (uint8_t)((millis() / NEWS_ROTATE_MS) % d.count);
+  const NewsItem &n = d.items[i];
+  // Source and age on the left, "3/8" on the right.
+  char age[12], head[40], pos[8];
+  int32_t mins = n.ageMin < 0 ? -1 : n.ageMin + (int32_t)((millis() - d.updatedAt) / 60000UL);
+  newsAge(age, sizeof(age), mins);
+  snprintf(head, sizeof(head), "%s%s%s", n.source, age[0] && n.source[0] ? " " : "", age);
+  textAt(head, 14, 10, 2, COL_DATE_WD);
+  snprintf(pos, sizeof(pos), "%u/%u", (unsigned)(i + 1), (unsigned)d.count);
+  textAt(pos, SCREEN_W - 14 - textW(pos, 2), 10, 2, COL_LABEL);
+  // The headline: size 3 when it fits in three lines, else size 2 in five.
+  const int width = SCREEN_W - 28;
+  size_t len = strlen(n.title);
+  if (len <= (size_t)(width / 18) * 3 - 6)
+    drawWrapped(n.title, 14, 40, 3, width / 18, 3, COL_VALUE);
+  else
+    drawWrapped(n.title, 14, 38, 2, width / 12, 5, COL_VALUE);
+  drawPageDots();
+}
+
 // ── MiSTer page (Zaparoo) ─────────────────────────────────
 
 void drawMister() {
@@ -2604,7 +2700,7 @@ Settings defaultsFromConfig() {
   d.windMph        = strcmp(WIND, "mph") == 0;
   const bool pages[SETTINGS_PAGE_COUNT] = {SHOW_FACE, SHOW_CLOCK, SHOW_DATE,
       SHOW_WEATHER, SHOW_MOON, SHOW_STOCK, SHOW_GITHUB, SHOW_HA, SHOW_NOW, SHOW_CAL,
-      SHOW_BUS, SHOW_FPL, SHOW_MISTER};
+      SHOW_BUS, SHOW_FPL, SHOW_MISTER, SHOW_NEWS};
   memcpy(d.pages, pages, sizeof(pages));
   strlcpy(d.bridgeUrl, BRIDGE_URL, sizeof(d.bridgeUrl));
   strlcpy(d.bridgeKey, BRIDGE_KEY, sizeof(d.bridgeKey));
@@ -3198,7 +3294,7 @@ static bool stale(bool valid, uint32_t updatedAt, uint32_t now, uint32_t ms) {
 
 void netTask(void *) {
   FetchPacer weatherPacer, stockPacer, githubPacer, haPacer, nowPacer, calPacer;
-  FetchPacer busPacer, fplPacer, misterPacer;
+  FetchPacer busPacer, fplPacer, misterPacer, newsPacer;
   uint32_t lastHealthLogMs = millis();
   bool tlsHealthLogged = false;
 
@@ -3250,6 +3346,11 @@ void netTask(void *) {
                  shown == PAGE_FPL ? FPL_REFRESH_SHOWN_MS : FPL_REFRESH_BG_MS)
         && fplPacer.ready(now)) {
       runFetch("fpl", fetchFpl, fplPacer, now, 0, FETCH_RETRY_MS);
+      ran = true;
+    } else if (bridge && settings.pages[PAGE_NEWS]
+        && stale(netShared.news.valid, netShared.news.updatedAt, now, NEWS_REFRESH_MS)
+        && newsPacer.ready(now)) {
+      runFetch("news", fetchNews, newsPacer, now, 0, FETCH_RETRY_MS);
       ran = true;
     } else if (settings.pages[PAGE_WEATHER]
         && (!netShared.weather.valid || now - netShared.weather.updatedAt >= WEATHER_REFRESH_INTERVAL_MS)
@@ -3504,7 +3605,8 @@ void loop() {
     case 9: drawCal();        break;
     case 10: drawBus();       break;
     case 11: drawFpl();       break;
-    default: drawMister();    break;
+    case 12: drawMister();    break;
+    default: drawNews();      break;
   }
   // Brightness or auto-advance feedback banner — shown briefly after a gesture.
   if (millis() < brightnessBannerUntil) {

@@ -532,6 +532,58 @@ function drawMister(c, m, now) {
   return s;
 }
 
+// ── drawNews ──────────────────────────────────────────────
+
+export const SAMPLE_NEWS = Object.freeze({ ok: true, items: [
+  { title: "LONDON MARATHON ENTRIES OPEN WITH RECORD NUMBER OF APPLICANTS EXPECTED", source: "BBC NEWS", age_min: 25 },
+  { title: "NEW ROUTEMASTER BUSES TO RETURN TO SOUTH EAST LONDON ROUTES", source: "BBC NEWS", age_min: 140 },
+] });
+
+export function newsAge(mins) {
+  if (mins < 0) return "";
+  if (mins < 2) return "NOW";
+  if (mins < 60) return `${mins}M AGO`;
+  if (mins < 1440) return `${Math.floor(mins / 60)}H AGO`;
+  return `${Math.floor(mins / 1440)}D AGO`;
+}
+
+// drawWrapped: word wrap to `cols`, at most `maxLines`, ".." when cut.
+export function wrapLines(text, cols, maxLines) {
+  const out = [];
+  let p = String(text);
+  while (out.length < maxLines && p.length) {
+    p = p.replace(/^ +/, "");
+    let take = p.length;
+    if (p.length > cols) {
+      take = cols;
+      while (take > 0 && p[take] !== " ") take--;
+      if (take === 0) take = cols;
+    }
+    let line = p.slice(0, take);
+    if (out.length === maxLines - 1 && take < p.length) line = `${line.trimEnd().slice(0, cols - 2)}..`;
+    out.push(line);
+    p = p.slice(take);
+  }
+  return out;
+}
+
+function drawNews(c, d, now) {
+  const items = d.items || [];
+  if (!items.length) return centred("NO HEADLINES", 66, 3, FG);
+  const i = Math.floor(now.getTime() / 6000) % items.length;
+  const n = items[i];
+  const age = newsAge(n.age_min ?? -1);
+  const head = [n.source, age].filter(Boolean).join(" ");
+  const pos = `${i + 1}/${items.length}`;
+  let s = txt(head, 14, 10, 2, c.dateWd) + txt(pos, SCREEN_W - 14 - textWidth(pos, 2), 10, 2, c.label);
+  const width = SCREEN_W - 28;
+  const big = n.title.length <= Math.floor(width / 18) * 3 - 6;
+  const size = big ? 3 : 2;
+  const lines = wrapLines(n.title, Math.floor(width / (6 * size)), big ? 3 : 5);
+  lines.forEach((line, k) => { s += txt(line, 14, (big ? 40 : 38) + k * (8 * size + 4), size, c.value); });
+  return s;
+}
+
 // The bridge's answer for one page, when the last Check returned it working.
 function liveBridge(live, key) {
   const b = live && live.bridge;
@@ -755,6 +807,7 @@ export function createPreview(container) {
         : key === "bus" ? drawBus(c, liveBridge(live, "bus") || SAMPLE_BUS)
         : key === "fpl" ? drawFpl(c, liveBridge(live, "fpl") || sampleFpl(now), now)
         : key === "mister" ? drawMister(c, liveBridge(live, "mister") || sampleMister(now), now)
+        : key === "news" ? drawNews(c, liveBridge(live, "news") || SAMPLE_NEWS, now)
         : drawGithub(c, live);
     }
     dotLayer.innerHTML = dots(cycle.pages.length, cycle.index);
@@ -779,7 +832,7 @@ export function createPreview(container) {
   }
 
   // The clock's seconds and colon change every second.
-  tick = setInterval(() => { if (cycle.page === "clock") draw(); }, 1000);
+  tick = setInterval(() => { if (cycle.page === "clock" || cycle.page === "news") draw(); }, 1000);
 
   const next = () => cycle.next();
   button.addEventListener("click", next);

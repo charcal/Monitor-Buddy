@@ -12,9 +12,9 @@ export const KEYS = ["mount", "theme", "github_user", "tz_name", "tz_rule", "tic
   "bridge_url", "bridge_key", "page_secs", "auto_page", "clock_format",
   "night_from", "night_to", "night_level", "brightness", "now_follow", "clock_date"];
 export const PAGE_KEYS = ["face", "clock", "date", "weather", "moon", "stock", "github", "ha", "now", "cal",
-  "bus", "fpl", "mister"];
+  "bus", "fpl", "mister", "news"];
 // The pages that come from the bridge: hidden while bridge_url is empty.
-export const BRIDGE_PAGES = ["ha", "now", "cal", "bus", "fpl", "mister"];
+export const BRIDGE_PAGES = ["ha", "now", "cal", "bus", "fpl", "mister", "news"];
 
 const DIGITS = "0123456789";
 const ALNUM = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";

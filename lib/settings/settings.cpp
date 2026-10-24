@@ -7,7 +7,7 @@
 
 const char *const SETTINGS_PAGE_KEYS[SETTINGS_PAGE_COUNT] = {
   "face", "clock", "date", "weather", "moon", "stock", "github", "ha", "now", "cal",
-  "bus", "fpl", "mister"};
+  "bus", "fpl", "mister", "news"};
 
 bool tzRuleFromOffset(float hours, char *out, size_t outLen) {
   if (!(hours >= -12.0f && hours <= 14.0f)) return false;
@@ -68,7 +68,7 @@ const char *const ALL_KEYS[] = {
 const char *const PAGE_PATHS[SETTINGS_PAGE_COUNT] = {
   "pages.face", "pages.clock", "pages.date", "pages.weather",
   "pages.moon", "pages.stock", "pages.github", "pages.ha", "pages.now", "pages.cal",
-  "pages.bus", "pages.fpl", "pages.mister"};
+  "pages.bus", "pages.fpl", "pages.mister", "pages.news"};
 
 bool allowedChar(char c, const TextKey &k) {
   return strchr(k.base, c) != nullptr || strchr(k.extra, c) != nullptr;

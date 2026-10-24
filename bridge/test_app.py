@@ -191,9 +191,9 @@ def test_api_key_guard(bridge, monkeypatch):
 def test_summary_shape(bridge):
     c = bridge.app.test_client()
     body = c.get("/api/summary").get_json()
-    assert set(body) == {"ok", "ha", "now", "cal", "bus", "fpl", "mister"}
+    assert set(body) == {"ok", "ha", "now", "cal", "bus", "fpl", "mister", "news"}
     assert body["now"]["playing"] is False
-    assert len(json.dumps(body)) < 2000   # comfortably small for the Buddy
+    assert len(json.dumps(body)) < 3000   # comfortably small for the Buddy
 
 
 # ── Next bus ──────────────────────────────────────────────
@@ -337,3 +337,42 @@ def test_fpl_rank_from_league(bridge, monkeypatch):
     bridge.cache._data.clear()
     out = bridge.fetch_fpl()
     assert out["rank"] == 845210 and out["league"] == "OVERALL"
+
+
+
+RSS = """<?xml version="1.0"?><rss version="2.0"><channel><title>BBC News</title>
+<item><title>Older story</title><pubDate>Sat, 24 Oct 2026 08:00:00 GMT</pubDate></item>
+<item><title>Breaking: something happened – live</title><pubDate>Sat, 24 Oct 2026 10:30:00 GMT</pubDate></item>
+<item><title>Duplicate</title><pubDate>Sat, 24 Oct 2026 09:00:00 GMT</pubDate></item>
+</channel></rss>""".encode()
+
+ATOM = b"""<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"><title>The Verge</title>
+<entry><title>A gadget</title><updated>2026-10-24T10:00:00Z</updated></entry>
+<entry><title>Duplicate</title><updated>2026-10-24T09:30:00Z</updated></entry>
+</feed>"""
+
+
+def test_news_merges_feeds_newest_first(bridge, monkeypatch):
+    from datetime import timezone
+    monkeypatch.setenv("NEWS_FEEDS", "https://bbc.example/rss.xml=BBC, https://verge.example/atom?a=1")
+    monkeypatch.setattr(bridge.time, "time", lambda: datetime(2026, 10, 24, 11, 0, tzinfo=timezone.utc).timestamp())
+    feeds = {"https://bbc.example/rss.xml": RSS, "https://verge.example/atom?a=1": ATOM}
+    monkeypatch.setattr(bridge.session, "get", lambda url, **k: Resp(content=feeds[url]))
+    out = bridge.fetch_news()
+    titles = [i["title"] for i in out["items"]]
+    assert titles == ["BREAKING: SOMETHING HAPPENED - LIVE", "A GADGET", "DUPLICATE", "OLDER STORY"]
+    assert out["items"][0] == {"title": "BREAKING: SOMETHING HAPPENED - LIVE", "source": "BBC", "age_min": 30}
+    assert out["items"][1]["source"] == "THE VERGE"       # the feed's own title when no label
+
+
+def test_news_default_feed_and_errors(bridge, monkeypatch):
+    asked = []
+
+    def get(url, **k):
+        asked.append(url)
+        return Resp(status=503)
+
+    monkeypatch.setattr(bridge.session, "get", get)
+    out = bridge.fetch_news()
+    assert asked == ["https://feeds.bbci.co.uk/news/rss.xml"]
+    assert out["ok"] is False and out["setup"] is True

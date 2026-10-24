@@ -14,7 +14,7 @@ const V2_KEYS = ["bridge_url", "bridge_key", "page_secs", "auto_page", "clock_fo
 const PAGE_DEFINES = {
   SHOW_FACE: "face", SHOW_CLOCK: "clock", SHOW_DATE: "date", SHOW_WEATHER: "weather",
   SHOW_MOON: "moon", SHOW_STOCK: "stock", SHOW_GITHUB: "github",
-  SHOW_HA: "ha", SHOW_NOW: "now", SHOW_CAL: "cal", SHOW_BUS: "bus", SHOW_FPL: "fpl", SHOW_MISTER: "mister",
+  SHOW_HA: "ha", SHOW_NOW: "now", SHOW_CAL: "cal", SHOW_BUS: "bus", SHOW_FPL: "fpl", SHOW_MISTER: "mister", SHOW_NEWS: "news",
 };
 // #define name -> settings key, for the plain one-to-one cases.
 const DIRECT = {

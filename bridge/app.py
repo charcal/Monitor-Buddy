@@ -13,6 +13,7 @@ upper-case ASCII that its 5x7 font can draw, already cut to fit.
     GET /api/bus           next buses at your stops (TfL)
     GET /api/fpl           Fantasy Premier League points, rank and deadline
     GET /api/mister        what's running on the MiSTer (Zaparoo)
+    GET /api/news          the latest news headlines (RSS/Atom; BBC News by default)
     GET /api/summary       all of them at once, for the web flasher's Check button
     GET /spotify/login     one-time Spotify sign-in (stores a refresh token in /data)
 
@@ -634,6 +635,93 @@ def fetch_mister() -> dict:
             "started": started}
 
 
+# ── News headlines (RSS / Atom) ───────────────────────────
+# NEWS_FEEDS: feed URLs, comma separated, each optionally =Label. Empty uses
+# BBC News top stories. NEWS_MAX: how many headlines (default 8).
+
+NEWS_DEFAULT = "https://feeds.bbci.co.uk/news/rss.xml=BBC NEWS"
+_ATOM = "{http://www.w3.org/2005/Atom}"
+
+
+def _feed_time(text):
+    """RSS pubDate (RFC 822) or Atom updated/published (ISO 8601) -> epoch, 0 if unknown."""
+    if not text:
+        return 0
+    text = text.strip()
+    try:
+        from email.utils import parsedate_to_datetime
+        return int(parsedate_to_datetime(text).timestamp())
+    except (TypeError, ValueError, IndexError):
+        pass
+    try:
+        return int(datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp())
+    except ValueError:
+        return 0
+
+
+def parse_feed(xml_bytes: bytes, label: str) -> list[dict]:
+    """Headlines from an RSS 2.0 or Atom feed: [{title, source, at}]."""
+    import xml.etree.ElementTree as ET
+    root = ET.fromstring(xml_bytes)
+    items = []
+    channel = root.find("channel")
+    if channel is not None:                                   # RSS 2.0
+        source = label or (channel.findtext("title") or "")
+        for it in channel.findall("item"):
+            items.append({"title": it.findtext("title") or "", "source": source,
+                          "at": _feed_time(it.findtext("pubDate"))})
+    else:                                                     # Atom
+        source = label or (root.findtext(f"{_ATOM}title") or "")
+        for e in root.findall(f"{_ATOM}entry"):
+            items.append({"title": e.findtext(f"{_ATOM}title") or "", "source": source,
+                          "at": _feed_time(e.findtext(f"{_ATOM}updated") or e.findtext(f"{_ATOM}published"))})
+    return [i for i in items if i["title"].strip()]
+
+
+def split_feed_entry(entry: str) -> tuple[str, str]:
+    """"https://x/rss=LABEL" -> (url, label). An "=" that is part of the URL's
+    query (?a=1) isn't a label."""
+    url, sep, label = entry.rpartition("=")
+    if not (sep and label and "://" in url) or re.search(r"[/:?&]", label):
+        return entry.strip(), ""
+    # "...?a=1": the "=" finishes a query parameter whose name has no "=" yet.
+    if "?" in url and "=" not in re.split(r"[?&]", url)[-1]:
+        return entry.strip(), ""
+    return url.strip(), label.strip()
+
+
+def fetch_news() -> dict:
+    feeds = env_list("NEWS_FEEDS") or [NEWS_DEFAULT]
+    limit = max(1, min(8, int(env("NEWS_MAX", "8") or 8)))
+    items, errors = [], []
+    for entry in feeds[:5]:
+        url, label = split_feed_entry(entry)
+        try:
+            def load(url=url):
+                r = session.get(url, timeout=HTTP_TIMEOUT * 2)
+                r.raise_for_status()
+                return r.content
+            items.extend(parse_feed(cache.get(f"feed:{url}", 600, load), label))
+        except Exception as e:   # one broken feed must not hide the others
+            errors.append(type(e).__name__)
+    if not items and errors:
+        return {"ok": False, "setup": True, "error": f"news: {', '.join(errors)}", "items": []}
+    now = time.time()
+    # Newest first; undated headlines after the dated ones, in feed order.
+    items.sort(key=lambda i: -i["at"] if i["at"] else 0)
+    seen, out = set(), []
+    for i in items:
+        title = clean(i["title"], 90)
+        if title in seen:
+            continue
+        seen.add(title)
+        out.append({"title": title, "source": clean(i["source"], 14),
+                    "age_min": int((now - i["at"]) // 60) if i["at"] else -1})
+        if len(out) >= limit:
+            break
+    return {"ok": True, "setup": True, "items": out}
+
+
 # ── HTTP ──────────────────────────────────────────────────
 
 def authorised() -> bool:
@@ -712,6 +800,11 @@ def api_mister():
     return jsonify(cache.get("mister", 5, lambda: _safe(fetch_mister)))
 
 
+@app.get("/api/news")
+def api_news():
+    return jsonify(cache.get("news", 120, lambda: _safe(fetch_news)))
+
+
 @app.get("/api/summary")
 def api_summary():
     h12 = request.args.get("fmt") == "12"
@@ -721,7 +814,8 @@ def api_summary():
                     "cal": cache.get(f"cal:{h12}", 60, lambda: _safe(lambda: fetch_cal(h12))),
                     "bus": cache.get("bus", 15, lambda: _safe(fetch_bus)),
                     "fpl": cache.get("fpl", 60, lambda: _safe(fetch_fpl)),
-                    "mister": cache.get("mister", 5, lambda: _safe(fetch_mister))})
+                    "mister": cache.get("mister", 5, lambda: _safe(fetch_mister)),
+                    "news": cache.get("news", 120, lambda: _safe(fetch_news))})
 
 
 _spotify_states: dict[str, float] = {}
