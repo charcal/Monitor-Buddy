@@ -230,6 +230,7 @@
 // used as a harmless "status LED" sink. Nothing is wired to it —
 // AWM just toggles it. If you solder an LED to another free pin,
 // change AWM_LED_PIN to match.
+#define RGB_LED_PIN     8   // onboard addressable RGB LED, switched off in setup()
 #define AWM_LED_PIN     3   // dummy/optional status LED — must NOT be an LCD or touch pin
 #define AWM_BUTTON_PIN  9   // onboard BOOT button, active LOW
 
@@ -3281,6 +3282,10 @@ void setup() {
   Serial.setTxTimeoutMs(0);
   delay(150);
   Serial.println("ESP32-C6 Monitor-Buddy " FW_VERSION " starting");
+  // The board's addressable RGB LED (GPIO8) can power up lit, very brightly,
+  // and nothing else drives it: switch it off. Its own power-on state needs a
+  // data frame to clear; GPIO8 is only a strapping pin during reset.
+  rgbLedWrite(RGB_LED_PIN, 0, 0, 0);
   netMutex = xSemaphoreCreateMutex();
   if (!netMutex) Serial.println("ERROR: no memory for netMutex - network pages disabled");
 
