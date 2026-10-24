@@ -135,7 +135,7 @@ BEGIN:VEVENT
 UID:2
 DTSTART;TZID=Europe/London:20261023T220000
 DTEND;TZID=Europe/London:20261023T230000
-SUMMARY:Late call with Rhiannon
+SUMMARY:Late call with the team
 END:VEVENT
 BEGIN:VEVENT
 UID:3
@@ -165,12 +165,12 @@ def test_calendar_events(bridge):
     now = datetime(2026, 10, 23, 21, 30, tzinfo=bridge.TZ)   # a Friday
     events = bridge.calendar_events([ICS], now, 7)
     titles = [e["title"] for e in events]
-    assert titles[0] == "Late call with Rhiannon"
+    assert titles[0] == "Late call with the team"
     assert "Already finished" not in titles and "Cancelled thing" not in titles
     assert titles[1] == "Saturday all day"
     assert titles[2] == "Weekly stand-up"                      # the recurrence on Tue 27th
     j = [bridge.event_json(e, now, False) for e in events]
-    assert j[0]["label"] == "TODAY 22:00" and j[0]["title"] == "LATE CALL WITH RHIANNON"
+    assert j[0]["label"] == "TODAY 22:00" and j[0]["title"] == "LATE CALL WITH THE TEAM"
     assert j[1]["label"] == "TOMORROW ALL DAY" and j[1]["all_day"]
     assert j[2]["label"] == "TUE 08:30"
     assert bridge.event_json(events[0], now, True)["time"] == "10:00PM"
