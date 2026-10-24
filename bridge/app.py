@@ -791,18 +791,55 @@ def next_collection(first: date, every: int, today: date) -> date:
     return today if gap == 0 else today + timedelta(days=every - gap)
 
 
-def fetch_bins(today: date | None = None) -> dict:
+# BIN_BANK_HOLIDAYS: the gov.uk division whose bank holidays push a week's
+# collection back a day (england-and-wales, scotland, northern-ireland);
+# "off" turns the shift off.
+BANK_HOLIDAYS_URL = "https://www.gov.uk/bank-holidays.json"
+
+
+def bank_holidays() -> set[date]:
+    division = env("BIN_BANK_HOLIDAYS", "england-and-wales") or "england-and-wales"
+    if division.lower() == "off":
+        return set()
+
+    def load():
+        r = session.get(BANK_HOLIDAYS_URL, timeout=HTTP_TIMEOUT)
+        r.raise_for_status()
+        return r.json()
+
+    try:
+        events = (cache.get("bank-holidays", 86400, load).get(division) or {}).get("events", [])
+        return {date.fromisoformat(e["date"]) for e in events if e.get("date")}
+    except (requests.RequestException, ValueError, KeyError):
+        return set()   # no list today: collections stay on their usual days
+
+
+def shift_for_holidays(d: date, holidays: set[date]) -> date:
+    """A bank holiday earlier in the same week (Monday up to the collection day)
+    pushes the collection back one day per holiday; a collection that then
+    lands on a bank holiday moves on again."""
+    monday = d - timedelta(days=d.weekday())
+    shifted = d + timedelta(days=sum(1 for h in holidays if monday <= h <= d))
+    while shifted in holidays:
+        shifted += timedelta(days=1)
+    return shifted
+
+
+def fetch_bins(today: date | None = None, holidays: set[date] | None = None) -> dict:
     schedule = bin_schedule()
     if not schedule:
         return {"ok": False, "setup": False, "error": "not configured", "days": []}
     now = datetime.now(TZ)
     today = today or now.date()
-    # The evening after a collection day is no longer "today".
+    holidays = bank_holidays() if holidays is None else holidays
     by_day: dict[date, list[str]] = {}
     for name, first, every in schedule:
-        d = next_collection(first, every, today)
+        # From a week back: a usual day already past can still be ahead once shifted.
+        d = next_collection(first, every, today - timedelta(days=7))
         while (d - today).days <= 21:          # every pickup in the next three weeks
-            by_day.setdefault(d, []).append(clean(name, 10))
+            actual = shift_for_holidays(d, holidays)
+            if actual >= today:
+                by_day.setdefault(actual, []).append(clean(name, 10))
             d += timedelta(days=every)
     days = []
     for d in sorted(by_day)[:2]:

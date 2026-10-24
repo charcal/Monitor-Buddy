@@ -416,14 +416,14 @@ def test_rail_defaults_to_local_lines(bridge, monkeypatch):
 def test_bins_next_collections(bridge, monkeypatch):
     from datetime import date
     monkeypatch.setenv("BINS", "Black=2026-10-27/14, Blue=2026-11-03/14, Food=2026-10-27/7")
-    out = bridge.fetch_bins(today=date(2026, 10, 24))          # a Saturday
+    out = bridge.fetch_bins(today=date(2026, 10, 24), holidays=set())          # a Saturday
     assert out["days"][0] == {"day": "TUE", "date": "2026-10-27", "in_days": 3, "bins": ["BLACK", "FOOD"]}
     assert out["days"][1]["date"] == "2026-11-03" and out["days"][1]["bins"] == ["BLUE", "FOOD"]
-    day_after = bridge.fetch_bins(today=date(2026, 11, 4))   # a Wednesday
+    day_after = bridge.fetch_bins(today=date(2026, 11, 4), holidays=set())   # a Wednesday
     assert day_after["days"][0]["day"] == "TUE" and day_after["days"][0]["bins"] == ["BLACK", "FOOD"]
-    day_before = bridge.fetch_bins(today=date(2026, 11, 2))
+    day_before = bridge.fetch_bins(today=date(2026, 11, 2), holidays=set())
     assert day_before["days"][0]["day"] == "TOMORROW" and day_before["days"][0]["bins"] == ["BLUE", "FOOD"]
-    today = bridge.fetch_bins(today=date(2026, 11, 3))
+    today = bridge.fetch_bins(today=date(2026, 11, 3), holidays=set())
     assert today["days"][0]["day"] == "TODAY"
 
 
@@ -431,3 +431,31 @@ def test_bins_not_configured(bridge, monkeypatch):
     assert bridge.fetch_bins()["setup"] is False
     monkeypatch.setenv("BINS", "nonsense")
     assert bridge.fetch_bins()["setup"] is False
+
+
+
+def test_bins_bank_holiday_shift(bridge, monkeypatch):
+    from datetime import date
+    # Black every other Thursday from 22 Oct 2026.
+    monkeypatch.setenv("BINS", "BLACK=2026-10-22/14")
+    hol = {date(2026, 12, 25), date(2026, 12, 28), date(2027, 1, 1), date(2027, 5, 3)}
+    shift = bridge.shift_for_holidays
+    assert shift(date(2026, 11, 5), hol) == date(2026, 11, 5)          # an ordinary week
+    # Mon 28 Dec is a holiday: Thu 31 Dec moves to Fri 1 Jan, also a holiday, so Sat 2 Jan.
+    assert shift(date(2026, 12, 31), hol) == date(2027, 1, 2)
+    # Christmas Day on the Friday comes after a Thursday collection: no change.
+    assert shift(date(2026, 12, 24), hol) == date(2026, 12, 24)
+    # The early May bank holiday (Mon 3 May 2027) moves Thu 6 May to Fri 7 May.
+    assert shift(date(2027, 5, 6), hol) == date(2027, 5, 7)
+    # On the usual Thursday, the shifted Friday still shows as tomorrow.
+    out = bridge.fetch_bins(today=date(2027, 5, 6), holidays=hol)
+    assert out["days"][0]["day"] == "TOMORROW" and out["days"][0]["date"] == "2027-05-07"
+
+
+def test_bins_bank_holidays_from_gov_uk(bridge, monkeypatch):
+    monkeypatch.setattr(bridge.session, "get", lambda url, **k: Resp(
+        {"england-and-wales": {"events": [{"date": "2026-12-28"}]}, "scotland": {"events": [{"date": "2026-11-30"}]}}))
+    from datetime import date
+    assert bridge.bank_holidays() == {date(2026, 12, 28)}
+    monkeypatch.setenv("BIN_BANK_HOLIDAYS", "off")
+    assert bridge.bank_holidays() == set()
