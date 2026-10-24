@@ -308,3 +308,18 @@ def test_mister_playing_idle_and_off(bridge, monkeypatch):
     monkeypatch.setattr(bridge.session, "post", off)
     out = bridge.fetch_mister()
     assert out["ok"] and out["online"] is False and out["playing"] is False
+
+
+def test_bus_routes_per_stop(bridge, monkeypatch):
+    monkeypatch.setenv("TFL_STOPS", "490009803W:89=Memorial Hospital, 490006969N:244")
+    monkeypatch.setenv("TFL_LINES", "")
+    arrivals = {
+        "490009803W": [{"lineName": "89", "destinationName": "Lewisham", "timeToStation": 200},
+                       {"lineName": "244", "destinationName": "Queen Elizabeth Hospital", "timeToStation": 60},
+                       {"lineName": "486", "destinationName": "North Greenwich", "timeToStation": 90}],
+        "490006969N": [{"lineName": "244", "destinationName": "Woolwich", "timeToStation": 400}],
+    }
+    monkeypatch.setattr(bridge.session, "get", lambda url, **k: Resp(arrivals[url.split("/")[-2]]))
+    out = bridge.fetch_bus()
+    assert out["stop"] == "MEMORIAL HOSPITAL"
+    assert [(r["line"], r["dest"]) for r in out["rows"]] == [("89", "LEWISHAM"), ("244", "WOOLWICH")]

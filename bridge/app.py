@@ -507,13 +507,18 @@ def fetch_bus() -> dict:
     lines = {l.upper() for l in env_list("TFL_LINES")}
     arrivals, label = [], ""
     for entry in stops[:3]:
+        # "490009803W:89=Memorial Hospital": stop, optional routes for this
+        # stop only (89+N89), optional label.
         code, _, name = entry.partition("=")
+        code, _, own = code.partition(":")
+        own_lines = {l.strip().upper() for l in own.split("+") if l.strip()}
         label = label or name.strip()
         try:
             stop = tfl_stop_id(code.strip())
             r = session.get(f"{TFL_API}/StopPoint/{stop}/Arrivals", params=tfl_params(), timeout=HTTP_TIMEOUT)
             r.raise_for_status()
-            arrivals.extend(r.json())
+            arrivals.extend(a for a in r.json() if not own_lines
+                            or str(a.get("lineName") or a.get("lineId") or "").upper() in own_lines)
         except (requests.RequestException, ValueError) as e:
             return {"ok": False, "setup": True, "error": f"tfl: {type(e).__name__}", "rows": []}
     return {"ok": True, "setup": True, "stop": clean(label, 20), "at": int(time.time()),
