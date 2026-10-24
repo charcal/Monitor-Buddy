@@ -114,7 +114,8 @@
 
 // ── Behaviour ───────────────────────────────────────────────
 // PAGE_SECS     Seconds each page shows before moving on (3-120).
-// AUTO_PAGE     Auto-advance at start-up. A double tap still toggles it.
+// AUTO_PAGE     true: pages move on by themselves (a double tap pauses).
+//               false: manual only, swipe to change pages.
 // CLOCK_FORMAT  "24h" or "12h".
 // NIGHT_FROM / NIGHT_TO  Dim the screen between these hours (0-23).
 //               NIGHT_FROM -1 turns night dimming off.
@@ -126,3 +127,6 @@
 #define NIGHT_FROM    -1
 #define NIGHT_TO      7
 #define NIGHT_LEVEL   20
+// BRIGHTNESS    Screen brightness at first start, 5-100 %. Swipe up or
+//               down on the screen to change it any time.
+#define BRIGHTNESS    70

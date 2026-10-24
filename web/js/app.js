@@ -1119,10 +1119,18 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
       attrs: { inputmode: "numeric", min: "3", max: "120", step: "1" },
       set: (v) => { f.config.page_secs = /^\d+$/.test(v.trim()) ? Number(v.trim()) : v; },
     });
-    const autoPage = switchRow({
-      label: S.form.autoPage, help: "auto_page", checked: f.config.auto_page !== false, badgeKey: "auto_page", errorKey: "auto_page",
-      set: (v) => { f.config.auto_page = v; },
-    });
+    const autoPage = radioGroup({ key: "auto_page", legend: S.form.autoPage, help: "auto_page", value: f.config.auto_page !== false,
+      options: [[true, S.form.autoPageAuto], [false, S.form.autoPageManual]], set: (v) => { f.config.auto_page = v; } });
+    // Brightness: a slider, with the value beside it.
+    const brId = uid("br");
+    const brValue = h("output", { class: "range__value", for: brId });
+    const brInput = h("input", { id: brId, type: "range", class: "range", min: "5", max: "100", step: "5" });
+    brInput.value = String(f.config.brightness ?? 70);
+    brInput.addEventListener("input", () => { f.config.brightness = Number(brInput.value); changed("brightness"); });
+    const brightness = h("div", { class: "field" },
+      head(h("label", { for: brId }, S.form.brightness), S.form.brightness, "brightness", "brightness"),
+      h("div", { class: "input-row" }, brInput, brValue), errorSlot("brightness", [brInput]));
+    refreshers.push(() => { brValue.textContent = S.form.brightnessValue(f.config.brightness ?? 70); });
     const hours = Array.from({ length: 24 }, (_, i) => [i, S.form.hour(i)]);
     const nightFrom = selectField({ key: "night_from", label: S.form.nightFrom, help: "night_from", value: f.config.night_from,
       options: [[-1, S.form.nightOff], ...hours], set: (v) => { f.config.night_from = v; } });
@@ -1138,7 +1146,8 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
       h("div", { class: "grid-2 grid-2--narrow-first" }, pageSecs.el,
         radioGroup({ key: "clock_format", legend: S.form.clockFormat, help: "clock_format", value: f.config.clock_format,
           options: [["24h", S.form.clock24], ["12h", S.form.clock12]], set: (v) => { f.config.clock_format = v; } })),
-      autoPage.el,
+      brightness,
+      autoPage,
       h("fieldset", { class: "field subgroup" }, h("legend", {}, S.form.night),
         h("div", { class: "grid-2" }, nightFrom.el, nightTo.el), nightLevel.el)));
     refreshers.push(() => {

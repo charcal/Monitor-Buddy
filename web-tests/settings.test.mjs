@@ -11,7 +11,7 @@ const DEFAULTS = {
   pages: { face: true, clock: true, date: true, weather: true, moon: true, stock: true, github: true,
     ha: true, now: true, cal: true, bus: true, fpl: true, mister: true },
   bridge_url: "", bridge_key: "", page_secs: 8, auto_page: true, clock_format: "24h",
-  night_from: -1, night_to: 7, night_level: 20,
+  night_from: -1, night_to: 7, night_level: 20, brightness: 70,
 };
 
 const bad = (patch, key) => {
@@ -32,7 +32,7 @@ test("KEYS are the firmware's keys in the firmware's order", () => {
   assert.deepEqual(KEYS, ["mount", "theme", "github_user", "tz_name", "tz_rule", "ticker",
     "stock_key", "lat", "lon", "temp_unit", "wind_unit", "pages",
     "bridge_url", "bridge_key", "page_secs", "auto_page", "clock_format",
-    "night_from", "night_to", "night_level"]);
+    "night_from", "night_to", "night_level", "brightness"]);
 });
 
 test("PAGE_KEYS are the firmware's pages in order", () => {
@@ -331,4 +331,10 @@ test("backup file name uses the date", () => {
 });
 test("backup file name zero-pads month and day", () => {
   assert.equal(backupFileName(new Date(2026, 0, 3, 23, 59)), "monitor-buddy-settings-2026-01-03.json");
+});
+
+test("brightness: a whole percentage 5-100", () => {
+  good({ brightness: 5 });
+  good({ brightness: 100 });
+  for (const v of [4, 101, 50.5, "70", null]) bad({ brightness: v }, "brightness");
 });

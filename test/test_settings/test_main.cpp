@@ -29,6 +29,7 @@ static Settings makeDefaults() {
   s.nightFrom = -1;
   s.nightTo = 7;
   s.nightLevel = 20;
+  s.brightness = 70;
   return s;
 }
 
@@ -93,7 +94,7 @@ static void test_load_applies_every_key() {
     "\"moon\":false,\"stock\":true,\"github\":true,\"ha\":false,\"now\":true,\"cal\":true,"
     "\"bus\":true,\"fpl\":false,\"mister\":true},"
     "\"bridge_url\":\"http://192.168.86.48:8787\",\"bridge_key\":\"k_1\",\"page_secs\":15,"
-    "\"auto_page\":false,\"clock_format\":\"12h\",\"night_from\":22,\"night_to\":6,\"night_level\":0}");
+    "\"auto_page\":false,\"clock_format\":\"12h\",\"night_from\":22,\"night_to\":6,\"night_level\":0,\"brightness\":40}");
   Settings out; AddedKeys added; JsonDocument inv;
   settingsLoad(makeDefaults(), file.as<JsonVariantConst>(), out, added, inv.to<JsonObject>());
   TEST_ASSERT_EQUAL_STRING("http://192.168.86.48:8787", out.bridgeUrl);
@@ -104,6 +105,7 @@ static void test_load_applies_every_key() {
   TEST_ASSERT_EQUAL(22, out.nightFrom);
   TEST_ASSERT_EQUAL(6, out.nightTo);
   TEST_ASSERT_EQUAL(0, out.nightLevel);
+  TEST_ASSERT_EQUAL(40, out.brightness);
   TEST_ASSERT_FALSE(out.pages[7]);
   TEST_ASSERT_TRUE(out.pages[9]);
   TEST_ASSERT_FALSE(out.pages[11]);
@@ -291,7 +293,8 @@ static void test_load_v1_file_reports_every_new_key() {
                             "night_from", "night_to", "night_level", "pages.ha", "pages.now", "pages.cal",
                             "pages.bus", "pages.fpl", "pages.mister"};
   for (const char *k : expected) TEST_ASSERT_TRUE_MESSAGE(hasAdded(added, k), k);
-  TEST_ASSERT_EQUAL(14, added.count);
+  TEST_ASSERT_TRUE(hasAdded(added, "brightness"));
+  TEST_ASSERT_EQUAL(15, added.count);
   TEST_ASSERT_EQUAL(8, out.pageSecs);
   TEST_ASSERT_EQUAL_STRING("GMT0BST,M3.5.0/1,M10.5.0", out.tzRule);
 }
@@ -320,7 +323,7 @@ static void test_merge_bridge_url_rules() {
 
 static void test_merge_new_number_and_choice_ranges() {
   JsonDocument ok;
-  deserializeJson(ok, "{\"page_secs\":3,\"night_from\":-1,\"night_to\":23,\"night_level\":100,"
+  deserializeJson(ok, "{\"brightness\":5,\"page_secs\":3,\"night_from\":-1,\"night_to\":23,\"night_level\":100,"
                       "\"clock_format\":\"12h\",\"auto_page\":false}");
   Settings out; JsonDocument errs;
   TEST_ASSERT_TRUE(settingsMerge(makeDefaults(), ok.as<JsonVariantConst>(), out, errs.to<JsonObject>()));
@@ -330,11 +333,11 @@ static void test_merge_new_number_and_choice_ranges() {
   TEST_ASSERT_FALSE(out.autoPage);
 
   JsonDocument bad;
-  deserializeJson(bad, "{\"page_secs\":2,\"night_from\":24,\"night_to\":-1,\"night_level\":101,"
+  deserializeJson(bad, "{\"brightness\":101,\"page_secs\":2,\"night_from\":24,\"night_to\":-1,\"night_level\":101,"
                        "\"clock_format\":\"am\",\"auto_page\":\"yes\",\"bridge_key\":\"a b\"}");
   JsonDocument errs2;
   TEST_ASSERT_FALSE(settingsMerge(makeDefaults(), bad.as<JsonVariantConst>(), out, errs2.to<JsonObject>()));
-  const char *keys[] = {"page_secs", "night_from", "night_to", "night_level", "clock_format",
+  const char *keys[] = {"brightness", "page_secs", "night_from", "night_to", "night_level", "clock_format",
                         "auto_page", "bridge_key"};
   for (const char *k : keys) TEST_ASSERT_FALSE_MESSAGE(errs2[k].isNull(), k);
 

@@ -190,6 +190,9 @@
 #ifndef NIGHT_LEVEL
   #define NIGHT_LEVEL 20
 #endif
+#ifndef BRIGHTNESS
+  #define BRIGHTNESS 70
+#endif
 
 // OTHER CONFIGURATION ----> EDIT ONLY IF NECESSARY
 
@@ -402,6 +405,8 @@ void serviceProtocol();
 void saveDisplaySettings();
 void setBrightness(int level);
 void flushBrightnessSave(bool now);
+uint8_t brightnessPercent(uint8_t level);
+uint8_t levelFromPercent(uint8_t percent);
 
 // V2 additions
 void drawBootMessage(const char *l1, const char *l2, const char *l3);
@@ -2556,6 +2561,7 @@ Settings defaultsFromConfig() {
   d.nightFrom  = (int8_t)constrain(NIGHT_FROM, -1, 23);
   d.nightTo    = (uint8_t)constrain(NIGHT_TO, 0, 23);
   d.nightLevel = (uint8_t)constrain(NIGHT_LEVEL, 0, 100);
+  d.brightness = (uint8_t)constrain(BRIGHTNESS, 5, 100);
   return d;
 }
 
@@ -2714,6 +2720,8 @@ void mbGet() {
   doc["v"]      = CONFIG_VERSION;
   doc["stored"] = settingsStored;
   settingsToJson(settings, doc["config"].to<JsonObject>());
+  // The level on screen now, which a swipe may have changed since boot.
+  doc["config"]["brightness"] = brightnessPercent(brightnessLevel);
   JsonArray added = doc["added"].to<JsonArray>();
   for (uint8_t i = 0; i < settingsAdded.count; i++) added.add(settingsAdded.keys[i]);
   mbReply(true, doc);
@@ -2740,6 +2748,14 @@ void mbSet(JsonDocument &req) {
     JsonDocument file;
     settingsToJson(next, file.to<JsonObject>());
     if (!writeJsonAtomic(CONFIG_PATH, file)) { mbError("could not save settings"); return; }
+    // Brightness lives in /display.json, which swipes also write: a SET that
+    // sends it sets the level there, so it survives the restart.
+    if (!cfg["brightness"].isNull()) {
+      brightnessLevel = levelFromPercent(next.brightness);
+      saveDisplaySettings();
+      savedBrightness = brightnessLevel;
+      brightnessSavePending = false;
+    }
   }
   if (!wifi.isNull()) {
     JsonDocument file;                    // AWM's plain format
@@ -2829,6 +2845,12 @@ void loadDisplaySettings() {
   brightnessLevel = (uint8_t)constrain(level, BRIGHTNESS_MINIMUM, 255);
 }
 
+// settings.brightness is a percentage; the backlight takes 0-255.
+uint8_t brightnessPercent(uint8_t level) { return (uint8_t)((level * 100U + 127U) / 255U); }
+uint8_t levelFromPercent(uint8_t percent) {
+  return (uint8_t)constrain((int)((percent * 255U + 50U) / 100U), BRIGHTNESS_MINIMUM, 255);
+}
+
 // Night dimming: true between settings.nightFrom and nightTo (wrapping past
 // midnight when from > to). Off until NTP has set the clock, so a Buddy
 // running on its build-time clock never dims at the wrong hour.
@@ -2881,6 +2903,12 @@ void flushBrightnessSave(bool now) {
 // ── Interaction handlers ──────────────────────────────────
 
 void triggerDoubleTap() {
+  // "Manual only" (settings.autoPage false): pages never advance by
+  // themselves, so a double tap has nothing to toggle.
+  if (!settings.autoPage) {
+    autoPageBannerUntil = millis() + 1400;
+    return;
+  }
   autoPageEnabled = !autoPageEnabled;
   autoPageBannerUntil = millis() + 1400;
   if (autoPageEnabled) nextAutoPage = millis() + pageIntervalMs();
@@ -3398,8 +3426,8 @@ void loop() {
     gfx->setCursor((SCREEN_W-bw)/2, SCREEN_H/2-4);
     gfx->print(msg);
   } else if (millis() < autoPageBannerUntil) {
-    const char *msg = autoPageEnabled ? "AUTO: ON" : "AUTO: OFF";
-    uint16_t bannerColor = autoPageEnabled ? rgb(0,200,80) : rgb(200,60,60);
+    const char *msg = !settings.autoPage ? "MANUAL ONLY" : autoPageEnabled ? "AUTO: ON" : "AUTO: OFF";
+    uint16_t bannerColor = !settings.autoPage ? rgb(0,200,255) : autoPageEnabled ? rgb(0,200,80) : rgb(200,60,60);
     gfx->setTextSize(1);
     gfx->setTextColor(bannerColor);
     int bw = (int)strlen(msg)*6;

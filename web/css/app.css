@@ -1129,6 +1129,20 @@ fieldset.field > legend {
   text-transform: uppercase;
 }
 
+/* The brightness slider and its value. */
+.range {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+
+.range__value {
+  min-width: 3.5ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
 /* A group of related fields inside a section (night dimming), set off by a rule. */
 fieldset.field.subgroup {
   margin-top: 1.25rem;

@@ -9,7 +9,8 @@
 
 // 2: the Home, Now playing and Calendar pages, the bridge, page timing,
 // the 12-hour clock and night dimming. 3: the Bus, FPL and MiSTer pages.
-static const int CONFIG_VERSION = 3;
+// 4: brightness.
+static const int CONFIG_VERSION = 4;
 static const uint8_t SETTINGS_PAGE_COUNT = 13;
 // Index order matches the PAGE_* ids in main.cpp (face = 0 ... mister = 12).
 extern const char *const SETTINGS_PAGE_KEYS[SETTINGS_PAGE_COUNT];
@@ -30,11 +31,14 @@ struct Settings {
   char    bridgeUrl[81];      // "" hides the Home, Now playing and Calendar pages
   char    bridgeKey[65];      // sent as X-Buddy-Key; "" sends none
   uint8_t pageSecs;           // auto-advance interval, 3-120 s
-  bool    autoPage;           // auto-advance on at boot (a double tap still toggles it)
+  bool    autoPage;           // true: pages advance by themselves (a double tap pauses);
+                              // false: manual only, a double tap can't turn it on
   bool    clock12h;
   int8_t  nightFrom;          // hour night dimming starts, -1 = off
   uint8_t nightTo;            // hour it ends, 0-23
   uint8_t nightLevel;         // night brightness, 0-100 % of the day level
+  uint8_t brightness;         // screen brightness, 5-100 %. GET reports the live level
+                              // (a swipe changes it); SET applies it at once.
 };
 
 // POSIX rule for a fixed UTC offset in hours, rounded to 15 minutes:

@@ -712,6 +712,9 @@ export function createPreview(container) {
     body.setAttribute("transform", right ? `rotate(180 ${VIEW_W / 2} ${VIEW_H / 2})` : "");
     monitor.setAttribute("transform", right ? `translate(${VIEW_W} 0) scale(-1 1)` : "");
     content.setAttribute("transform", right ? `rotate(180 ${SCREEN_W / 2} ${SCREEN_H / 2})` : "");
+    // Brightness, softened: a real backlight at 5% is still readable up close.
+    const b = Number.isFinite(config.brightness) ? config.brightness : 70;
+    content.style.filter = `brightness(${(0.3 + 0.7 * (b / 100)).toFixed(2)})`;
   }
 
   function draw() {
