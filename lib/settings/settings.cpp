@@ -7,7 +7,7 @@
 
 const char *const SETTINGS_PAGE_KEYS[SETTINGS_PAGE_COUNT] = {
   "face", "clock", "date", "weather", "moon", "stock", "github", "ha", "now", "cal",
-  "bus", "fpl", "mister", "news"};
+  "bus", "fpl", "mister", "news", "bins", "rail"};
 
 bool tzRuleFromOffset(float hours, char *out, size_t outLen) {
   if (!(hours >= -12.0f && hours <= 14.0f)) return false;
@@ -63,12 +63,12 @@ const char *const ALL_KEYS[] = {
   "mount", "theme", "github_user", "tz_name", "tz_rule", "ticker", "stock_key",
   "lat", "lon", "temp_unit", "wind_unit", "pages",
   "bridge_url", "bridge_key", "page_secs", "auto_page", "clock_format",
-  "night_from", "night_to", "night_level", "brightness", "now_follow", "clock_date"};
+  "night_from", "night_to", "night_level", "brightness", "now_follow", "clock_date", "meeting_alert"};
 
 const char *const PAGE_PATHS[SETTINGS_PAGE_COUNT] = {
   "pages.face", "pages.clock", "pages.date", "pages.weather",
   "pages.moon", "pages.stock", "pages.github", "pages.ha", "pages.now", "pages.cal",
-  "pages.bus", "pages.fpl", "pages.mister", "pages.news"};
+  "pages.bus", "pages.fpl", "pages.mister", "pages.news", "pages.bins", "pages.rail"};
 
 bool allowedChar(char c, const TextKey &k) {
   return strchr(k.base, c) != nullptr || strchr(k.extra, c) != nullptr;
@@ -202,6 +202,11 @@ bool applyKey(const char *key, JsonVariantConst v, Settings &s, const char *&err
     s.nightTo = (uint8_t)n;
     return true;
   }
+  if (strcmp(key, "meeting_alert") == 0) {
+    if (!applyInt(v, 0, 30, n, "must be a whole number 0 (off) to 30", err)) return false;
+    s.meetingAlert = (uint8_t)n;
+    return true;
+  }
   if (strcmp(key, "brightness") == 0) {
     if (!applyInt(v, 5, 100, n, "must be a whole number 5-100", err)) return false;
     s.brightness = (uint8_t)n;
@@ -303,6 +308,7 @@ void settingsToJson(const Settings &s, JsonObject out) {
   out["brightness"]   = s.brightness;
   out["now_follow"]   = s.nowFollow;
   out["clock_date"]   = s.clockDate;
+  out["meeting_alert"] = s.meetingAlert;
 }
 
 bool wifiValidate(JsonVariantConst wifi, char *ssid, size_t ssidLen,

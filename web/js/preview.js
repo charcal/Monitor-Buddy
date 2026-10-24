@@ -584,6 +584,56 @@ function drawNews(c, d, now) {
   return s;
 }
 
+// ── drawBins, drawRail ────────────────────────────────────
+
+export const SAMPLE_BINS = Object.freeze({ ok: true, days: [
+  { day: "TOMORROW", in_days: 1, bins: ["BLACK", "FOOD"] },
+  { day: "TUE", in_days: 8, bins: ["BLUE", "FOOD"] },
+] });
+
+function drawBins(c, b) {
+  const days = b.days || [];
+  if (!days.length) return centred("NO COLLECTIONS", 66, 3, FG);
+  const next = days[0];
+  let s = txt("BIN DAY", 14, 10, 2, c.label)
+    + txt(next.day, 14, 32, fitSize(next.day, SCREEN_W - 28, 5), next.in_days <= 1 ? c.priceDown : c.dateWd);
+  const line = next.bins.join(" + ");
+  s += txt(line, 14, 82, fitSize(line, SCREEN_W - 28, 3), c.value);
+  if (days[1]) {
+    const then = `THEN ${days[1].day}: ${days[1].bins.join(" + ")}`;
+    s += txt(then.slice(0, Math.floor((SCREEN_W - 28) / 12)), 14, 128, 2, c.label);
+  }
+  return s;
+}
+
+export const SAMPLE_RAIL = Object.freeze({ ok: true, all_good: false, lines: [
+  { name: "ELIZABETH", short: "GOOD", level: 0 },
+  { name: "DLR", short: "DELAYS", level: 1 },
+  { name: "SOUTHEASTERN", short: "GOOD", level: 0 },
+] });
+
+const RAIL_COL = ["#3cdc78", "#ffb428", "#ff505a"];   // rgb() in drawRail
+
+function drawRail(c, r) {
+  const lines = r.lines || [];
+  if (r.all_good) {
+    const names = lines.map((l) => l.name).join("  ");
+    return centred("GOOD SERVICE", 34, 4, RAIL_COL[0]) + centred(names, 92, fitSize(names, SCREEN_W - 20, 2), c.label);
+  }
+  const rows = Math.min(5, lines.length);
+  const rowH = Math.min(34, Math.floor(148 / (rows || 1)));
+  let s = "";
+  lines.slice(0, rows).forEach((l, i) => {
+    const y = 8 + i * rowH + Math.floor((rowH - 16) / 2);
+    const col = RAIL_COL[l.level] || RAIL_COL[1];
+    const st = String(l.short ?? l.status ?? "");
+    const sx = SCREEN_W - 14 - textWidth(st, 2);
+    const name = String(l.name).slice(0, Math.max(0, Math.floor((sx - 34 - 10) / 12)));
+    s += `<circle cx="20" cy="${y + 7}" r="5" fill="${col}"/>` + txt(name, 34, y, 2, c.value) + txt(st, sx, y, 2, col);
+  });
+  return s;
+}
+
 // The bridge's answer for one page, when the last Check returned it working.
 function liveBridge(live, key) {
   const b = live && live.bridge;
@@ -808,6 +858,8 @@ export function createPreview(container) {
         : key === "fpl" ? drawFpl(c, liveBridge(live, "fpl") || sampleFpl(now), now)
         : key === "mister" ? drawMister(c, liveBridge(live, "mister") || sampleMister(now), now)
         : key === "news" ? drawNews(c, liveBridge(live, "news") || SAMPLE_NEWS, now)
+        : key === "bins" ? drawBins(c, liveBridge(live, "bins") || SAMPLE_BINS)
+        : key === "rail" ? drawRail(c, liveBridge(live, "rail") || SAMPLE_RAIL)
         : drawGithub(c, live);
     }
     dotLayer.innerHTML = dots(cycle.pages.length, cycle.index);

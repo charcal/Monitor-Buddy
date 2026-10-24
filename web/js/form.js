@@ -24,7 +24,8 @@ export const DEFAULTS = Object.freeze({
   temp_unit: "celsius",
   wind_unit: "kmh",
   pages: Object.freeze({ face: true, clock: true, date: true, weather: true, moon: true, stock: true, github: true,
-    ha: true, now: true, cal: true, bus: true, fpl: true, mister: true, news: true }),
+    ha: true, now: true, cal: true, bus: true, fpl: true, mister: true, news: true,
+    bins: true, rail: true }),
   bridge_url: "",
   bridge_key: "",
   page_secs: 8,
@@ -36,6 +37,7 @@ export const DEFAULTS = Object.freeze({
   brightness: 70,
   now_follow: true,
   clock_date: true,
+  meeting_alert: 5,
 });
 
 // Flows, as spec §4. flash: the flow writes firmware; erase: it erases first.
@@ -229,7 +231,9 @@ export function bridgeMessage(res) {
   const { bus, fpl, mister } = res.summary || {};
   if (bus) parts.push(bus.ok ? B.bus((bus.rows || []).length) : bus.setup === false ? B.busOff : B.busError);
   if (fpl) parts.push(fpl.ok ? B.fpl(fpl.gw_points ?? 0) : fpl.setup === false ? B.fplOff : B.fplError);
-  const { news } = res.summary || {};
+  const { news, rail, bins } = res.summary || {};
+  if (rail) parts.push(!rail.ok ? B.railError : rail.all_good ? B.railGood : B.railIssues);
+  if (bins) parts.push(bins.ok && (bins.days || []).length ? B.bins(bins.days[0].day) : bins.setup === false ? B.binsOff : B.binsError);
   if (news) parts.push(news.ok ? B.news((news.items || []).length) : B.newsError);
   if (mister) {
     parts.push(!mister.ok ? (mister.setup === false ? B.misterNotSet : B.misterOff)
@@ -255,7 +259,7 @@ export function locationSummary(config, placeLabel = "") {
 // The pages that show the theme's colours, in the order a theme change tries
 // them (Eric, 2026-10-12): the face never uses the theme.
 export const THEMED_PAGES = Object.freeze(["clock", "date", "weather", "moon", "stock", "github", "ha", "now", "cal",
-  "bus", "fpl", "mister", "news"]);
+  "bus", "fpl", "mister", "news", "bins", "rail"]);
 
 // The preview page a changed setting belongs to, so the preview can jump
 // there (GUI review, Eric 2026-10-12): a page key, "stay" (hold the current
@@ -273,9 +277,10 @@ export function previewPageFor(key, config) {
     case "clock_format": case "clock_date": return "clock";
     case "brightness": return "stay";
     case "now_follow": return "now";
+    case "meeting_alert": return "cal";
     case "bridge_url": case "bridge_key": case "check.bridge": {
       const shown = pageList(config);
-      return ["now", "ha", "cal", "bus", "fpl", "mister", "news"].find((p) => shown.includes(p)) || "stay";
+      return ["now", "ha", "cal", "bus", "fpl", "mister", "news", "bins", "rail"].find((p) => shown.includes(p)) || "stay";
     }
     case "mount": return "face";
     case "theme": {

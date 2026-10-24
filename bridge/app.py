@@ -14,6 +14,8 @@ upper-case ASCII that its 5x7 font can draw, already cut to fit.
     GET /api/fpl           Fantasy Premier League points, rank and deadline
     GET /api/mister        what's running on the MiSTer (Zaparoo)
     GET /api/news          the latest news headlines (RSS/Atom; BBC News by default)
+    GET /api/rail          Tube, DLR, Elizabeth line and rail status (TfL)
+    GET /api/bins          the next bin collection day
     GET /api/summary       all of them at once, for the web flasher's Check button
     GET /spotify/login     one-time Spotify sign-in (stores a refresh token in /data)
 
@@ -722,6 +724,93 @@ def fetch_news() -> dict:
     return {"ok": True, "setup": True, "items": out}
 
 
+# ── Tube and rail status (TfL) ────────────────────────────
+# RAIL_LINES: TfL line ids, comma separated, each optionally =Label.
+# Tube lines by name (jubilee, northern), plus elizabeth, dlr, and National
+# Rail operators such as southeastern, thameslink, southern.
+
+RAIL_DEFAULT = "elizabeth,dlr,southeastern"
+# TfL statusSeverity -> 0 good, 1 minor, 2 severe or closed.
+RAIL_LEVEL = {10: 0, 18: 0, 19: 0,
+              7: 1, 8: 1, 9: 1, 11: 1, 12: 1, 13: 1, 14: 1, 15: 1, 17: 1,
+              0: 2, 1: 2, 2: 2, 3: 2, 4: 2, 5: 2, 6: 2, 16: 2, 20: 2}
+
+
+# Short words for the Buddy's row layout, by TfL statusSeverity.
+RAIL_SHORT = {10: "GOOD", 18: "GOOD", 19: "INFO", 9: "DELAYS", 6: "SEVERE", 7: "REDUCED",
+              3: "PART SUSP", 2: "SUSPENDED", 1: "CLOSED", 4: "CLOSED", 5: "PART CLOSED",
+              20: "CLOSED", 16: "NOT RUNNING", 11: "PART CLOSED", 14: "CHANGED", 15: "DIVERTED",
+              8: "BUS SERVICE", 17: "ISSUES", 12: "EXIT ONLY", 13: "NO STEP FREE", 0: "SPECIAL"}
+
+
+def fetch_rail() -> dict:
+    entries = env_list("RAIL_LINES") or RAIL_DEFAULT.split(",")
+    ids, labels = [], {}
+    for e in entries[:6]:
+        lid, _, label = e.partition("=")
+        lid = lid.strip().lower()
+        ids.append(lid)
+        if label.strip():
+            labels[lid] = label.strip()
+    r = session.get(f"{TFL_API}/Line/{','.join(ids)}/Status", params=tfl_params(), timeout=HTTP_TIMEOUT)
+    r.raise_for_status()
+    by_id = {l.get("id"): l for l in r.json()}
+    lines = []
+    for lid in ids:
+        line = by_id.get(lid)
+        if not line:
+            lines.append({"name": clean(labels.get(lid, lid), 12), "status": "UNKNOWN LINE",
+                          "short": "UNKNOWN", "level": 1})
+            continue
+        statuses = line.get("lineStatuses") or [{"statusSeverity": 10, "statusSeverityDescription": "Good Service"}]
+        worst = max(statuses, key=lambda s: RAIL_LEVEL.get(s.get("statusSeverity"), 1))
+        lines.append({"name": clean(labels.get(lid) or line.get("name") or lid, 12),
+                      "status": clean(worst.get("statusSeverityDescription", ""), 18),
+                      "short": RAIL_SHORT.get(worst.get("statusSeverity"), "ISSUES"),
+                      "level": RAIL_LEVEL.get(worst.get("statusSeverity"), 1)})
+    return {"ok": True, "setup": True, "all_good": all(l["level"] == 0 for l in lines), "lines": lines}
+
+
+# ── Bin day ───────────────────────────────────────────────
+# BINS: each bin as NAME=first collection date/every N days, comma separated:
+#   BINS=BLACK=2026-10-27/14, BLUE=2026-11-03/14, FOOD=2026-10-27/7
+
+def bin_schedule() -> list[tuple[str, date, int]]:
+    out = []
+    for part in env_list("BINS"):
+        m = re.fullmatch(r"\s*([^=]+?)\s*=\s*(\d{4}-\d{2}-\d{2})\s*/\s*(\d+)\s*", part)
+        if m and int(m.group(3)) > 0:
+            out.append((m.group(1), date.fromisoformat(m.group(2)), int(m.group(3))))
+    return out
+
+
+def next_collection(first: date, every: int, today: date) -> date:
+    if today <= first:
+        return first
+    gap = (today - first).days % every
+    return today if gap == 0 else today + timedelta(days=every - gap)
+
+
+def fetch_bins(today: date | None = None) -> dict:
+    schedule = bin_schedule()
+    if not schedule:
+        return {"ok": False, "setup": False, "error": "not configured", "days": []}
+    now = datetime.now(TZ)
+    today = today or now.date()
+    # The evening after a collection day is no longer "today".
+    by_day: dict[date, list[str]] = {}
+    for name, first, every in schedule:
+        d = next_collection(first, every, today)
+        while (d - today).days <= 21:          # every pickup in the next three weeks
+            by_day.setdefault(d, []).append(clean(name, 10))
+            d += timedelta(days=every)
+    days = []
+    for d in sorted(by_day)[:2]:
+        days.append({"day": day_word(d, today), "date": d.isoformat(),
+                     "in_days": (d - today).days, "bins": by_day[d]})
+    return {"ok": True, "setup": True, "days": days}
+
+
 # ── HTTP ──────────────────────────────────────────────────
 
 def authorised() -> bool:
@@ -805,6 +894,16 @@ def api_news():
     return jsonify(cache.get("news", 120, lambda: _safe(fetch_news)))
 
 
+@app.get("/api/rail")
+def api_rail():
+    return jsonify(cache.get("rail", 60, lambda: _safe(fetch_rail)))
+
+
+@app.get("/api/bins")
+def api_bins():
+    return jsonify(cache.get("bins", 300, lambda: _safe(fetch_bins)))
+
+
 @app.get("/api/summary")
 def api_summary():
     h12 = request.args.get("fmt") == "12"
@@ -815,7 +914,9 @@ def api_summary():
                     "bus": cache.get("bus", 15, lambda: _safe(fetch_bus)),
                     "fpl": cache.get("fpl", 60, lambda: _safe(fetch_fpl)),
                     "mister": cache.get("mister", 5, lambda: _safe(fetch_mister)),
-                    "news": cache.get("news", 120, lambda: _safe(fetch_news))})
+                    "news": cache.get("news", 120, lambda: _safe(fetch_news)),
+                    "rail": cache.get("rail", 60, lambda: _safe(fetch_rail)),
+                    "bins": cache.get("bins", 300, lambda: _safe(fetch_bins))})
 
 
 _spotify_states: dict[str, float] = {}

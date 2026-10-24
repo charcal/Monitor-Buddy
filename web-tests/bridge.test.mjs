@@ -11,7 +11,7 @@ const zones = JSON.parse(readFileSync(new URL("../web/vendor/posix_tz_db/zones.j
 const on = { ...DEFAULTS, pages: { ...DEFAULTS.pages } };
 
 test("the bridge pages hide while bridge_url is empty, like buildPageList", () => {
-  const bridgePages = ["ha", "now", "cal", "bus", "fpl", "mister", "news"];
+  const bridgePages = ["ha", "now", "cal", "bus", "fpl", "mister", "news", "bins", "rail"];
   assert.deepEqual(pageList({ ...on, bridge_url: "" }).filter((p) => bridgePages.includes(p)), []);
   const withBridge = pageList({ ...on, bridge_url: "http://10.0.0.2:8787" });
   assert.deepEqual(withBridge.slice(-bridgePages.length), bridgePages);
@@ -126,4 +126,11 @@ test("news: word wrap mirrors drawWrapped, ages read naturally", () => {
   assert.equal(newsAge(140), "2H AGO");
   assert.equal(newsAge(3000), "2D AGO");
   assert.equal(newsAge(-1), "");
+});
+
+test("bridgeMessage adds rail and bins", () => {
+  const base = { ha: { ok: true, items: [] }, now: { ok: true }, cal: { ok: true, events: [] } };
+  const msg = bridgeMessage({ status: "ok", summary: { ...base,
+    rail: { ok: true, all_good: true, lines: [] }, bins: { ok: true, days: [{ day: "TOMORROW", bins: ["BLUE"] }] } } });
+  assert.match(msg, /rail: good service, bins tomorrow$/);
 });

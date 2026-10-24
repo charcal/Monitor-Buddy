@@ -169,6 +169,15 @@
 #ifndef SHOW_NEWS
   #define SHOW_NEWS true
 #endif
+#ifndef SHOW_BINS
+  #define SHOW_BINS true
+#endif
+#ifndef SHOW_RAIL
+  #define SHOW_RAIL true
+#endif
+#ifndef MEETING_ALERT
+  #define MEETING_ALERT 5
+#endif
 #ifndef BRIDGE_URL
   #define BRIDGE_URL ""
 #endif
@@ -292,6 +301,9 @@ static constexpr uint32_t MISTER_REFRESH_SHOWN_MS = 10UL * 1000UL;
 static constexpr uint32_t MISTER_REFRESH_BG_MS    = 60UL * 1000UL;
 static constexpr uint32_t NEWS_REFRESH_MS         = 10UL * 60UL * 1000UL;
 static constexpr uint32_t NEWS_ROTATE_MS          = 6000UL;   // each headline on screen
+static constexpr uint32_t BINS_REFRESH_MS         = 30UL * 60UL * 1000UL;
+static constexpr uint32_t RAIL_REFRESH_SHOWN_MS   = 2UL * 60UL * 1000UL;
+static constexpr uint32_t RAIL_REFRESH_BG_MS      = 5UL * 60UL * 1000UL;
 // A touch while the backlight is off at night wakes it for this long.
 static constexpr uint32_t NIGHT_WAKE_MS         = 30UL * 1000UL;
 
@@ -384,6 +396,8 @@ bool fetchBus();
 bool fetchFpl();
 bool fetchMister();
 bool fetchNews();
+bool fetchBins();
+bool fetchRail();
 void drawHa();
 void drawNow();
 void drawCal();
@@ -391,6 +405,10 @@ void drawBus();
 void drawFpl();
 void drawMister();
 void drawNews();
+void drawBins();
+void drawRail();
+bool meetingTakeover(int &idx);
+void drawMeeting(int idx);
 uint32_t pageIntervalMs();
 void applyBacklight();
 bool nightNow();
@@ -681,7 +699,7 @@ bool bsp_touch_get_coordinates(uint16_t *outX, uint16_t *outY) {
 
 static const int SCREEN_W         = 320;
 static const int SCREEN_H         = 172;
-static const uint8_t APP_COUNT    = 14;  // total number of pages defined
+static const uint8_t APP_COUNT    = 16;  // total number of pages defined
 
 // Page identifiers, in fixed display order. These index the render switch in
 // loop(); which are actually shown is decided by settings.pages.
@@ -699,6 +717,8 @@ static constexpr uint8_t PAGE_BUS     = 10;  // next buses (TfL), from the bridg
 static constexpr uint8_t PAGE_FPL     = 11;  // Fantasy Premier League, from the bridge
 static constexpr uint8_t PAGE_MISTER  = 12;  // what's running on the MiSTer, from the bridge
 static constexpr uint8_t PAGE_NEWS    = 13;  // news headlines, from the bridge
+static constexpr uint8_t PAGE_BINS    = 14;  // next bin collection, from the bridge
+static constexpr uint8_t PAGE_RAIL    = 15;  // Tube and rail status, from the bridge
 
 // -- Face expressions (ported from DESKBUDDY-1.0, Edison Science Corner) --
 // 9 moods, cycled by single-tapping the face page. A fast spin of the board
@@ -734,7 +754,8 @@ bool settingsStored = false;   // booted from a readable /config.json; GET "stor
 static_assert(PAGE_FACE == 0 && PAGE_CLOCK == 1 && PAGE_DATE == 2 &&
               PAGE_WEATHER == 3 && PAGE_MOON == 4 && PAGE_STOCK == 5 &&
               PAGE_GITHUB == 6 && PAGE_HA == 7 && PAGE_NOW == 8 && PAGE_CAL == 9 &&
-              PAGE_BUS == 10 && PAGE_FPL == 11 && PAGE_MISTER == 12 && PAGE_NEWS == 13,
+              PAGE_BUS == 10 && PAGE_FPL == 11 && PAGE_MISTER == 12 && PAGE_NEWS == 13 &&
+              PAGE_BINS == 14 && PAGE_RAIL == 15,
               "settings.pages[] is indexed by PAGE_* ids");
 static_assert(SETTINGS_PAGE_COUNT == APP_COUNT,
               "settings.pages[] needs one entry per page");
@@ -827,11 +848,15 @@ struct FplData     { bool valid, setup, live; char team[21]; int gw, gwPoints, n
                      int32_t total, rank; int64_t deadline; uint32_t updatedAt; };
 struct MisterData  { bool valid, setup, online, playing; char system[21]; char game[44];
                      int64_t started; uint32_t updatedAt; };
+struct BinDay      { char day[10]; uint8_t inDays; uint8_t count; char bins[4][12]; };
+struct BinsData    { bool valid, setup; uint8_t count; BinDay days[2]; uint32_t updatedAt; };
+struct RailLine    { char name[14]; char status[14]; uint8_t level; };   // status: the short word
+struct RailData    { bool valid, setup, allGood; uint8_t count; RailLine lines[6]; uint32_t updatedAt; };
 struct NewsItem    { char title[92]; char source[16]; int32_t ageMin; };
 struct NewsData    { bool valid, setup; uint8_t count; NewsItem items[8]; uint32_t updatedAt; };
 struct NetData     { WeatherData weather; StockData stock; GithubData github;
                      HaData ha; NowData now; CalData cal; BusData bus; FplData fpl; MisterData mister;
-                     NewsData news; };
+                     NewsData news; BinsData bins; RailData rail; };
 
 NetData           netShared = {};
 NetData           netView   = {};
@@ -1107,7 +1132,7 @@ void buildPageList() {
     if (i == PAGE_GITHUB && !githubConfigured()) continue;  // "" hides the page
     if (i == PAGE_DATE && settings.clockDate && settings.pages[PAGE_CLOCK]) continue;  // on the clock page
     if (i == PAGE_STOCK && !stockConfigured()) continue;    // no key hides the page
-    if (i >= PAGE_HA && i <= PAGE_NEWS && !bridgeConfigured()) continue;   // the bridge pages
+    if (i >= PAGE_HA && i <= PAGE_RAIL && !bridgeConfigured()) continue;   // the bridge pages
     pageOrder[pageCount++] = i;
   }
   if (pageCount == 0) pageOrder[pageCount++] = PAGE_FACE;  // never leave it empty
@@ -1558,6 +1583,48 @@ bool fetchNews() {
   d.updatedAt = millis();
   d.valid     = true;
   publishNetData(netShared.news, d);
+  return true;
+}
+
+bool fetchBins() {
+  JsonDocument doc;
+  if (!bridgeGet("/api/bins", doc)) return false;
+  BinsData b = {};
+  b.setup = !bridgeNotSetUp(doc);
+  if (b.setup && !(doc["ok"] | false)) return false;
+  for (JsonObjectConst d : doc["days"].as<JsonArrayConst>()) {
+    if (b.count >= 2) break;
+    BinDay &day = b.days[b.count++];
+    copyText(day.day, sizeof(day.day), d["day"] | "");
+    day.inDays = (uint8_t)constrain(d["in_days"] | 0, 0, 255);
+    for (JsonVariantConst n : d["bins"].as<JsonArrayConst>()) {
+      if (day.count >= 4) break;
+      copyText(day.bins[day.count++], sizeof(day.bins[0]), n | "");
+    }
+  }
+  b.updatedAt = millis();
+  b.valid     = true;
+  publishNetData(netShared.bins, b);
+  return true;
+}
+
+bool fetchRail() {
+  JsonDocument doc;
+  if (!bridgeGet("/api/rail", doc)) return false;
+  if (!(doc["ok"] | false)) return false;
+  RailData r = {};
+  r.setup   = true;
+  r.allGood = doc["all_good"] | false;
+  for (JsonObjectConst l : doc["lines"].as<JsonArrayConst>()) {
+    if (r.count >= 6) break;
+    RailLine &line = r.lines[r.count++];
+    copyText(line.name,   sizeof(line.name),   l["name"] | "");
+    copyText(line.status, sizeof(line.status), l["short"] | (l["status"] | ""));
+    line.level = (uint8_t)constrain(l["level"] | 1, 0, 2);
+  }
+  r.updatedAt = millis();
+  r.valid     = true;
+  publishNetData(netShared.rail, r);
   return true;
 }
 
@@ -2569,6 +2636,128 @@ void drawNews() {
   drawPageDots();
 }
 
+// ── Bin day page ──────────────────────────────────────────
+// The next collection big ("TOMORROW" and the bins), the one after small.
+
+void drawBins() {
+  gfx->fillScreen(BG);
+  const BinsData &b = netView.bins;
+  if (drawBridgeGate(b.valid, b.setup, "BIN DAY")) return;
+  if (b.count == 0) { centeredText("NO COLLECTIONS", 66, 3); drawPageDots(); return; }
+  const BinDay &next = b.days[0];
+  // Today or tomorrow is news; further off is just information.
+  bool soon = next.inDays <= 1;
+  textAt("BIN DAY", 14, 10, 2, COL_LABEL);
+  textAt(next.day, 14, 32, fitSize(next.day, SCREEN_W - 28, 5), soon ? COL_PRICE_DOWN : COL_DATE_WD);
+  char line[48] = "";
+  for (uint8_t i = 0; i < next.count; i++) {
+    if (i) strlcat(line, " + ", sizeof(line));
+    strlcat(line, next.bins[i], sizeof(line));
+  }
+  textAt(line, 14, 82, fitSize(line, SCREEN_W - 28, 3), COL_VALUE);
+  if (b.count > 1) {
+    const BinDay &after = b.days[1];
+    char then[48];
+    snprintf(then, sizeof(then), "THEN %s:", after.day);
+    for (uint8_t i = 0; i < after.count; i++) {
+      strlcat(then, i ? " + " : " ", sizeof(then));
+      strlcat(then, after.bins[i], sizeof(then));
+    }
+    char cut[27];
+    truncTo(cut, sizeof(cut), then, (SCREEN_W - 28) / 12);
+    textAt(cut, 14, 128, 2, COL_LABEL);
+  }
+  drawPageDots();
+}
+
+// ── Tube and rail status page ─────────────────────────────
+
+void drawRail() {
+  gfx->fillScreen(BG);
+  const RailData &r = netView.rail;
+  if (drawBridgeGate(r.valid, r.setup, "RAIL")) return;
+  const uint16_t GOOD = rgb(60, 220, 120), MINOR = rgb(255, 180, 40), SEVERE = rgb(255, 80, 90);
+  if (r.allGood) {
+    // All quiet: say so big, with the lines underneath.
+    centeredTextColor("GOOD SERVICE", 34, 4, GOOD);
+    char names[64] = "";
+    for (uint8_t i = 0; i < r.count; i++) {
+      if (i) strlcat(names, "  ", sizeof(names));
+      strlcat(names, r.lines[i].name, sizeof(names));
+    }
+    uint8_t sz = fitSize(names, SCREEN_W - 20, 2);
+    centeredTextColor(names, 92, sz, COL_LABEL);
+    drawPageDots();
+    return;
+  }
+  // Something's up: one row per line, in the order of RAIL_LINES.
+  int rows = r.count > 5 ? 5 : r.count;
+  int rowH = 148 / (rows ? rows : 1);
+  if (rowH > 34) rowH = 34;
+  for (int i = 0; i < rows; i++) {
+    const RailLine &l = r.lines[i];
+    int y = 8 + i * rowH + (rowH - 16) / 2;
+    uint16_t col = l.level == 0 ? GOOD : l.level == 1 ? MINOR : SEVERE;
+    gfx->fillCircle(20, y + 7, 5, col);
+    // Status right-aligned; the name gets whatever room is left of it.
+    int sx = SCREEN_W - 14 - textW(l.status, 2);
+    textAt(l.status, sx, y, 2, col);
+    char name[14];
+    truncTo(name, sizeof(name), l.name, (sx - 34 - 10) / 12);
+    textAt(name, 34, y, 2, COL_VALUE);
+  }
+  drawPageDots();
+}
+
+// ── Meeting countdown (takes over the screen) ─────────────
+// meeting_alert minutes before a timed calendar event, until a minute after
+// it starts. A tap dismisses it for that event.
+
+int64_t meetingDismissed = 0;   // start time of the event a tap dismissed
+
+bool meetingTakeover(int &idx) {
+  idx = -1;
+  if (!settings.meetingAlert || !ntpSynced || !bridgeConfigured()) return false;
+  const CalData &c = netView.cal;
+  if (!c.valid) return false;
+  int64_t now = (int64_t)time(nullptr);
+  for (uint8_t i = 0; i < c.count; i++) {
+    const CalEvent &e = c.events[i];
+    if (e.allDay || e.start == meetingDismissed) continue;
+    if (now >= e.start - (int64_t)settings.meetingAlert * 60 && now < e.start + 60) { idx = i; return true; }
+  }
+  return false;
+}
+
+// A tap while the countdown shows: dismiss it. True when it did.
+bool dismissMeeting() {
+  int idx;
+  if (!meetingTakeover(idx)) return false;
+  meetingDismissed = netView.cal.events[idx].start;
+  return true;
+}
+
+void drawMeeting(int idx) {
+  gfx->fillScreen(BG);
+  const CalEvent &e = netView.cal.events[idx];
+  int64_t left = e.start - (int64_t)time(nullptr);
+  bool started = left <= 0;
+  uint16_t accent = started ? COL_PRICE_DOWN : COL_DATE_WD;
+  // A slim bar around the edge, so it reads as an alert from across the room.
+  gfx->drawRect(2, 2, SCREEN_W - 4, SCREEN_H - 4, accent);
+  gfx->drawRect(3, 3, SCREEN_W - 6, SCREEN_H - 6, accent);
+  textAt(started ? "STARTING NOW" : "NEXT MEETING", 14, 14, 2, accent);
+  marqueeText(e.title[0] ? e.title : "MEETING", 14, 42, SCREEN_W - 28, 3, COL_VALUE);
+  if (!started) {
+    char t[12];
+    snprintf(t, sizeof(t), "%d:%02d", (int)(left / 60), (int)(left % 60));
+    textAt(t, 14, 84, 6, COL_GHNUM);
+    textAt("MIN", 14 + textW(t, 6) + 8, 84 + 48 - 16, 2, COL_LABEL);
+  } else {
+    textAt("TAP TO DISMISS", 14, 100, 2, COL_LABEL);
+  }
+}
+
 // ── MiSTer page (Zaparoo) ─────────────────────────────────
 
 void drawMister() {
@@ -2700,7 +2889,7 @@ Settings defaultsFromConfig() {
   d.windMph        = strcmp(WIND, "mph") == 0;
   const bool pages[SETTINGS_PAGE_COUNT] = {SHOW_FACE, SHOW_CLOCK, SHOW_DATE,
       SHOW_WEATHER, SHOW_MOON, SHOW_STOCK, SHOW_GITHUB, SHOW_HA, SHOW_NOW, SHOW_CAL,
-      SHOW_BUS, SHOW_FPL, SHOW_MISTER, SHOW_NEWS};
+      SHOW_BUS, SHOW_FPL, SHOW_MISTER, SHOW_NEWS, SHOW_BINS, SHOW_RAIL};
   memcpy(d.pages, pages, sizeof(pages));
   strlcpy(d.bridgeUrl, BRIDGE_URL, sizeof(d.bridgeUrl));
   strlcpy(d.bridgeKey, BRIDGE_KEY, sizeof(d.bridgeKey));
@@ -2713,6 +2902,7 @@ Settings defaultsFromConfig() {
   d.brightness = (uint8_t)constrain(BRIGHTNESS, 5, 100);
   d.nowFollow  = NOW_FOLLOW;
   d.clockDate  = CLOCK_DATE;
+  d.meetingAlert = (uint8_t)constrain(MEETING_ALERT, 0, 30);
   return d;
 }
 
@@ -3066,7 +3256,10 @@ void triggerDoubleTap() {
   Serial.printf("Auto-advance: %s\n", autoPageEnabled ? "ON" : "OFF");
 }
 
+bool dismissMeeting();
+
 void triggerFaceTap() {
+  if (dismissMeeting()) return;   // a tap on the meeting countdown only clears it
   uint32_t now = millis();
   // Double-tap detection: two taps within 400 ms
   if (now - lastTapMs < 400UL) {
@@ -3294,7 +3487,7 @@ static bool stale(bool valid, uint32_t updatedAt, uint32_t now, uint32_t ms) {
 
 void netTask(void *) {
   FetchPacer weatherPacer, stockPacer, githubPacer, haPacer, nowPacer, calPacer;
-  FetchPacer busPacer, fplPacer, misterPacer, newsPacer;
+  FetchPacer busPacer, fplPacer, misterPacer, newsPacer, binsPacer, railPacer;
   uint32_t lastHealthLogMs = millis();
   bool tlsHealthLogged = false;
 
@@ -3324,7 +3517,7 @@ void netTask(void *) {
         && haPacer.ready(now)) {
       runFetch("ha", fetchHa, haPacer, now, 0, FETCH_RETRY_MS);
       ran = true;
-    } else if (bridge && settings.pages[PAGE_CAL]
+    } else if (bridge && (settings.pages[PAGE_CAL] || settings.meetingAlert > 0)
         && stale(netShared.cal.valid, netShared.cal.updatedAt, now, CAL_REFRESH_MS)
         && calPacer.ready(now)) {
       runFetch("cal", fetchCal, calPacer, now, 0, FETCH_RETRY_MS);
@@ -3351,6 +3544,17 @@ void netTask(void *) {
         && stale(netShared.news.valid, netShared.news.updatedAt, now, NEWS_REFRESH_MS)
         && newsPacer.ready(now)) {
       runFetch("news", fetchNews, newsPacer, now, 0, FETCH_RETRY_MS);
+      ran = true;
+    } else if (bridge && settings.pages[PAGE_RAIL]
+        && stale(netShared.rail.valid, netShared.rail.updatedAt, now,
+                 shown == PAGE_RAIL ? RAIL_REFRESH_SHOWN_MS : RAIL_REFRESH_BG_MS)
+        && railPacer.ready(now)) {
+      runFetch("rail", fetchRail, railPacer, now, 0, FETCH_RETRY_MS);
+      ran = true;
+    } else if (bridge && settings.pages[PAGE_BINS]
+        && stale(netShared.bins.valid, netShared.bins.updatedAt, now, BINS_REFRESH_MS)
+        && binsPacer.ready(now)) {
+      runFetch("bins", fetchBins, binsPacer, now, 0, FETCH_RETRY_MS);
       ran = true;
     } else if (settings.pages[PAGE_WEATHER]
         && (!netShared.weather.valid || now - netShared.weather.updatedAt >= WEATHER_REFRESH_INTERVAL_MS)
@@ -3592,7 +3796,9 @@ void loop() {
 
   snapshotNetData();
   followNowPlaying();
-  switch (currentApp) {
+  int meetingIdx = -1;
+  if (meetingTakeover(meetingIdx)) drawMeeting(meetingIdx);
+  else switch (currentApp) {
     case 0: drawFace(tx, ty); break;
     case 1: drawClock();      break;
     case 2: drawDatePage();   break;
@@ -3606,7 +3812,9 @@ void loop() {
     case 10: drawBus();       break;
     case 11: drawFpl();       break;
     case 12: drawMister();    break;
-    default: drawNews();      break;
+    case 13: drawNews();      break;
+    case 14: drawBins();      break;
+    default: drawRail();      break;
   }
   // Brightness or auto-advance feedback banner — shown briefly after a gesture.
   if (millis() < brightnessBannerUntil) {

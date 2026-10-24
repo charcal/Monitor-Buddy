@@ -6,15 +6,15 @@ import { ruleForZone, ruleFromOffset } from "./tz.js";
 const KEY_ORDER = ["mount", "theme", "github_user", "tz_name", "tz_rule", "ticker",
   "stock_key", "lat", "lon", "temp_unit", "wind_unit", "pages",
   "bridge_url", "bridge_key", "page_secs", "auto_page", "clock_format",
-  "night_from", "night_to", "night_level", "brightness", "now_follow", "clock_date"];
+  "night_from", "night_to", "night_level", "brightness", "now_follow", "clock_date", "meeting_alert"];
 // Added in settings version 2.
 const V2_KEYS = ["bridge_url", "bridge_key", "page_secs", "auto_page", "clock_format",
-  "night_from", "night_to", "night_level", "brightness", "now_follow", "clock_date"];
+  "night_from", "night_to", "night_level", "brightness", "now_follow", "clock_date", "meeting_alert"];
 
 const PAGE_DEFINES = {
   SHOW_FACE: "face", SHOW_CLOCK: "clock", SHOW_DATE: "date", SHOW_WEATHER: "weather",
   SHOW_MOON: "moon", SHOW_STOCK: "stock", SHOW_GITHUB: "github",
-  SHOW_HA: "ha", SHOW_NOW: "now", SHOW_CAL: "cal", SHOW_BUS: "bus", SHOW_FPL: "fpl", SHOW_MISTER: "mister", SHOW_NEWS: "news",
+  SHOW_HA: "ha", SHOW_NOW: "now", SHOW_CAL: "cal", SHOW_BUS: "bus", SHOW_FPL: "fpl", SHOW_MISTER: "mister", SHOW_NEWS: "news", SHOW_BINS: "bins", SHOW_RAIL: "rail",
 };
 // #define name -> settings key, for the plain one-to-one cases.
 const DIRECT = {
@@ -22,7 +22,7 @@ const DIRECT = {
   LAT: "lat", LONG: "lon", TEMP: "temp_unit", WIND: "wind_unit",
   BRIDGE_URL: "bridge_url", BRIDGE_KEY: "bridge_key", PAGE_SECS: "page_secs", AUTO_PAGE: "auto_page",
   CLOCK_FORMAT: "clock_format", NIGHT_FROM: "night_from", NIGHT_TO: "night_to", NIGHT_LEVEL: "night_level",
-  BRIGHTNESS: "brightness", NOW_FOLLOW: "now_follow", CLOCK_DATE: "clock_date",
+  BRIGHTNESS: "brightness", NOW_FOLLOW: "now_follow", CLOCK_DATE: "clock_date", MEETING_ALERT: "meeting_alert",
 };
 // Defines that feed another setting rather than mapping to one.
 const HELPERS = ["TZ_RULE", "TZ_OFFSET_HOURS"];

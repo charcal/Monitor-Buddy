@@ -191,7 +191,7 @@ def test_api_key_guard(bridge, monkeypatch):
 def test_summary_shape(bridge):
     c = bridge.app.test_client()
     body = c.get("/api/summary").get_json()
-    assert set(body) == {"ok", "ha", "now", "cal", "bus", "fpl", "mister", "news"}
+    assert set(body) == {"ok", "ha", "now", "cal", "bus", "fpl", "mister", "news", "rail", "bins"}
     assert body["now"]["playing"] is False
     assert len(json.dumps(body)) < 3000   # comfortably small for the Buddy
 
@@ -376,3 +376,58 @@ def test_news_default_feed_and_errors(bridge, monkeypatch):
     out = bridge.fetch_news()
     assert asked == ["https://feeds.bbci.co.uk/news/rss.xml"]
     assert out["ok"] is False and out["setup"] is True
+
+
+
+# ── Rail status ───────────────────────────────────────────
+
+def test_rail_status(bridge, monkeypatch):
+    monkeypatch.setenv("RAIL_LINES", "elizabeth, dlr, southeastern=SE TRAINS")
+    asked = []
+
+    def get(url, **k):
+        asked.append(url)
+        return Resp([
+            {"id": "elizabeth", "name": "Elizabeth line", "lineStatuses": [{"statusSeverity": 10, "statusSeverityDescription": "Good Service"}]},
+            {"id": "dlr", "name": "DLR", "lineStatuses": [{"statusSeverity": 9, "statusSeverityDescription": "Minor Delays"},
+                                                          {"statusSeverity": 10, "statusSeverityDescription": "Good Service"}]},
+            {"id": "southeastern", "name": "Southeastern", "lineStatuses": [{"statusSeverity": 6, "statusSeverityDescription": "Severe Delays"}]},
+        ])
+
+    monkeypatch.setattr(bridge.session, "get", get)
+    out = bridge.fetch_rail()
+    assert asked == ["https://api.tfl.gov.uk/Line/elizabeth,dlr,southeastern/Status"]
+    assert out["all_good"] is False
+    assert out["lines"] == [{"name": "ELIZABETH", "status": "GOOD SERVICE", "short": "GOOD", "level": 0},
+                            {"name": "DLR", "status": "MINOR DELAYS", "short": "DELAYS", "level": 1},
+                            {"name": "SE TRAINS", "status": "SEVERE DELAYS", "short": "SEVERE", "level": 2}]
+
+
+def test_rail_defaults_to_local_lines(bridge, monkeypatch):
+    asked = []
+    monkeypatch.setattr(bridge.session, "get", lambda url, **k: asked.append(url) or Resp([]))
+    out = bridge.fetch_rail()
+    assert asked == ["https://api.tfl.gov.uk/Line/elizabeth,dlr,southeastern/Status"]
+    assert [l["status"] for l in out["lines"]] == ["UNKNOWN LINE"] * 3
+
+
+# ── Bin day ───────────────────────────────────────────────
+
+def test_bins_next_collections(bridge, monkeypatch):
+    from datetime import date
+    monkeypatch.setenv("BINS", "Black=2026-10-27/14, Blue=2026-11-03/14, Food=2026-10-27/7")
+    out = bridge.fetch_bins(today=date(2026, 10, 24))          # a Saturday
+    assert out["days"][0] == {"day": "TUE", "date": "2026-10-27", "in_days": 3, "bins": ["BLACK", "FOOD"]}
+    assert out["days"][1]["date"] == "2026-11-03" and out["days"][1]["bins"] == ["BLUE", "FOOD"]
+    day_after = bridge.fetch_bins(today=date(2026, 11, 4))   # a Wednesday
+    assert day_after["days"][0]["day"] == "TUE" and day_after["days"][0]["bins"] == ["BLACK", "FOOD"]
+    day_before = bridge.fetch_bins(today=date(2026, 11, 2))
+    assert day_before["days"][0]["day"] == "TOMORROW" and day_before["days"][0]["bins"] == ["BLUE", "FOOD"]
+    today = bridge.fetch_bins(today=date(2026, 11, 3))
+    assert today["days"][0]["day"] == "TODAY"
+
+
+def test_bins_not_configured(bridge, monkeypatch):
+    assert bridge.fetch_bins()["setup"] is False
+    monkeypatch.setenv("BINS", "nonsense")
+    assert bridge.fetch_bins()["setup"] is False

@@ -9,9 +9,9 @@ const DEFAULTS = {
   mount: "left", theme: 2, github_user: "IdefixRC", tz_name: "Asia/Singapore", tz_rule: "<+08>-8",
   ticker: "AAPL", stock_key: "", lat: "1.3119", lon: "103.8149", temp_unit: "celsius", wind_unit: "kmh",
   pages: { face: true, clock: true, date: true, weather: true, moon: true, stock: true, github: true,
-    ha: true, now: true, cal: true, bus: true, fpl: true, mister: true, news: true },
+    ha: true, now: true, cal: true, bus: true, fpl: true, mister: true, news: true, bins: true, rail: true },
   bridge_url: "", bridge_key: "", page_secs: 8, auto_page: true, clock_format: "24h",
-  night_from: -1, night_to: 7, night_level: 20, brightness: 70, now_follow: true, clock_date: true,
+  night_from: -1, night_to: 7, night_level: 20, brightness: 70, now_follow: true, clock_date: true, meeting_alert: 5,
 };
 
 const bad = (patch, key) => {
@@ -32,12 +32,12 @@ test("KEYS are the firmware's keys in the firmware's order", () => {
   assert.deepEqual(KEYS, ["mount", "theme", "github_user", "tz_name", "tz_rule", "ticker",
     "stock_key", "lat", "lon", "temp_unit", "wind_unit", "pages",
     "bridge_url", "bridge_key", "page_secs", "auto_page", "clock_format",
-    "night_from", "night_to", "night_level", "brightness", "now_follow", "clock_date"]);
+    "night_from", "night_to", "night_level", "brightness", "now_follow", "clock_date", "meeting_alert"]);
 });
 
 test("PAGE_KEYS are the firmware's pages in order", () => {
   assert.deepEqual(PAGE_KEYS, ["face", "clock", "date", "weather", "moon", "stock", "github", "ha", "now", "cal",
-    "bus", "fpl", "mister", "news"]);
+    "bus", "fpl", "mister", "news", "bins", "rail"]);
 });
 
 // -- settings version 2: the bridge and behaviour keys ------------------------
@@ -257,7 +257,7 @@ test("merge changes only the patched key", () => {
 test("merge keeps the other pages", () => {
   const m = mergeConfig(DEFAULTS, { pages: { stock: false } });
   assert.deepEqual(m.pages, { face: true, clock: true, date: true, weather: true, moon: true, stock: false, github: true,
-    ha: true, now: true, cal: true, bus: true, fpl: true, mister: true, news: true });
+    ha: true, now: true, cal: true, bus: true, fpl: true, mister: true, news: true, bins: true, rail: true });
 });
 test("merge drops unknown keys, v and unknown pages", () => {
   const m = mergeConfig(DEFAULTS, { v: 1, future_key: 1, pages: { future: true }, theme: 4 });
@@ -342,4 +342,10 @@ test("brightness: a whole percentage 5-100", () => {
 test("now_follow: true or false", () => {
   good({ now_follow: false });
   for (const v of [1, "true", null]) bad({ now_follow: v }, "now_follow");
+});
+
+test("meeting_alert: 0 (off) to 30 minutes", () => {
+  good({ meeting_alert: 0 });
+  good({ meeting_alert: 30 });
+  for (const v of [-1, 31, 2.5, "5"]) bad({ meeting_alert: v }, "meeting_alert");
 });

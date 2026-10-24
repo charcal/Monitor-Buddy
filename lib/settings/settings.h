@@ -10,9 +10,10 @@
 // 2: the Home, Now playing and Calendar pages, the bridge, page timing,
 // the 12-hour clock and night dimming. 3: the Bus, FPL and MiSTer pages.
 // 4: brightness.
-static const int CONFIG_VERSION = 7;   // 5: now_follow. 6: clock_date. 7: the News page
-static const uint8_t SETTINGS_PAGE_COUNT = 14;
-// Index order matches the PAGE_* ids in main.cpp (face = 0 ... news = 13).
+static const int CONFIG_VERSION = 8;   // 5: now_follow. 6: clock_date. 7: the News page.
+                                       // 8: the Bins and Rail pages, meeting_alert
+static const uint8_t SETTINGS_PAGE_COUNT = 16;
+// Index order matches the PAGE_* ids in main.cpp (face = 0 ... rail = 15).
 extern const char *const SETTINGS_PAGE_KEYS[SETTINGS_PAGE_COUNT];
 
 struct Settings {
@@ -41,6 +42,7 @@ struct Settings {
                               // (a swipe changes it); SET applies it at once.
   bool    nowFollow;          // jump to Now playing when music starts, home when it stops
   bool    clockDate;          // the day and date under the clock; hides the Date page
+  uint8_t meetingAlert;       // minutes before a meeting to show the countdown, 0 = off
 };
 
 // POSIX rule for a fixed UTC offset in hours, rounded to 15 minutes:
