@@ -11,7 +11,7 @@ const DEFAULTS = {
   pages: { face: true, clock: true, date: true, weather: true, moon: true, stock: true, github: true,
     ha: true, now: true, cal: true, bus: true, fpl: true, mister: true },
   bridge_url: "", bridge_key: "", page_secs: 8, auto_page: true, clock_format: "24h",
-  night_from: -1, night_to: 7, night_level: 20, brightness: 70, now_follow: true,
+  night_from: -1, night_to: 7, night_level: 20, brightness: 70, now_follow: true, clock_date: true,
 };
 
 const bad = (patch, key) => {
@@ -32,7 +32,7 @@ test("KEYS are the firmware's keys in the firmware's order", () => {
   assert.deepEqual(KEYS, ["mount", "theme", "github_user", "tz_name", "tz_rule", "ticker",
     "stock_key", "lat", "lon", "temp_unit", "wind_unit", "pages",
     "bridge_url", "bridge_key", "page_secs", "auto_page", "clock_format",
-    "night_from", "night_to", "night_level", "brightness", "now_follow"]);
+    "night_from", "night_to", "night_level", "brightness", "now_follow", "clock_date"]);
 });
 
 test("PAGE_KEYS are the firmware's pages in order", () => {

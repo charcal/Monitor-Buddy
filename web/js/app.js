@@ -984,18 +984,20 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
     const stockHidden = note(S.form.stockHidden, "note--info");
     const githubHidden = note(S.form.githubHidden, "note--info");
     const bridgeHidden = note(S.form.bridgeHidden, "note--info");
+    const dateCombined = note(S.form.dateCombined, "note--info");
     // The legend is the section's title, so the help button sits next to it.
     form.append(h("section", { class: "section" },
       h("fieldset", { class: "field pages" },
         h("legend", { class: "section__legend" }, head(h("h2", { class: "section__title" }, S.form.pages), S.form.pages, "pages", "pages")),
         h("div", { class: "pages__grid" }, pageRows.map((r) => r.el)),
         errorSlot("pages", [])),
-      allOff, stockHidden, githubHidden, bridgeHidden));
+      allOff, stockHidden, githubHidden, bridgeHidden, dateCombined));
     refreshers.push(() => {
       const pages = f.config.pages || {};
       allOff.hidden = PAGE_KEYS.some((p) => pages[p]);
       stockHidden.hidden = !(pages.stock && !f.config.stock_key);
       githubHidden.hidden = !(pages.github && !f.config.github_user);
+      dateCombined.hidden = !(pages.date && pages.clock && f.config.clock_date !== false);
       bridgeHidden.hidden = !((pages.ha || pages.now || pages.cal) && !f.config.bridge_url);
     });
 
@@ -1148,6 +1150,8 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
           options: [["24h", S.form.clock24], ["12h", S.form.clock12]], set: (v) => { f.config.clock_format = v; } })),
       brightness,
       autoPage,
+      switchRow({ label: S.form.clockDate, help: "clock_date", checked: f.config.clock_date !== false,
+        badgeKey: "clock_date", errorKey: "clock_date", set: (v) => { f.config.clock_date = v; } }).el,
       switchRow({ label: S.form.nowFollow, help: "now_follow", checked: f.config.now_follow !== false,
         badgeKey: "now_follow", errorKey: "now_follow", set: (v) => { f.config.now_follow = v; } }).el,
       h("fieldset", { class: "field subgroup" }, h("legend", {}, S.form.night),

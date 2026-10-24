@@ -8,7 +8,7 @@ const main = readFileSync(new URL("../src/main.cpp", import.meta.url), "utf8");
 const all = { face: true, clock: true, date: true, weather: true, moon: true, stock: true, github: true };
 
 test("page list mirrors buildPageList", () => {
-  const c = { github_user: "octocat", stock_key: "k", pages: all };
+  const c = { github_user: "octocat", stock_key: "k", clock_date: false, pages: all };
   assert.deepEqual(pageList(c), ["face", "clock", "date", "weather", "moon", "stock", "github"]);
   assert.deepEqual(pageList({ ...c, stock_key: "" }), ["face", "clock", "date", "weather", "moon", "github"]);
   assert.deepEqual(pageList({ ...c, github_user: "" }), ["face", "clock", "date", "weather", "moon", "stock"]);

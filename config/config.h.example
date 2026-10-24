@@ -133,3 +133,5 @@
 // NOW_FOLLOW    true: jump to Now playing when music starts, and back to the
 //               first page when it stops.
 #define NOW_FOLLOW    true
+// CLOCK_DATE    true: the day and date under the clock, and no separate Date page.
+#define CLOCK_DATE    true

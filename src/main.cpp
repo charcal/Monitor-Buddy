@@ -196,6 +196,9 @@
 #ifndef NOW_FOLLOW
   #define NOW_FOLLOW true
 #endif
+#ifndef CLOCK_DATE
+  #define CLOCK_DATE true
+#endif
 
 // OTHER CONFIGURATION ----> EDIT ONLY IF NECESSARY
 
@@ -1091,6 +1094,7 @@ void buildPageList() {
   for (uint8_t i = 0; i < SETTINGS_PAGE_COUNT; i++) {
     if (!settings.pages[i]) continue;
     if (i == PAGE_GITHUB && !githubConfigured()) continue;  // "" hides the page
+    if (i == PAGE_DATE && settings.clockDate && settings.pages[PAGE_CLOCK]) continue;  // on the clock page
     if (i == PAGE_STOCK && !stockConfigured()) continue;    // no key hides the page
     if (i >= PAGE_HA && i <= PAGE_MISTER && !bridgeConfigured()) continue;   // the bridge pages
     pageOrder[pageCount++] = i;
@@ -1931,29 +1935,50 @@ void drawClock() {
   uint32_t sod     = (clockStartSeconds+elapsed)%86400UL;
   uint8_t hh = sod/3600UL, mm = (sod/60UL)%60UL, ss = sod%60UL;
   gfx->fillScreen(BG);
-  const int W = 54, H = 100, T = 10, Y = 18;   // bigger 7-seg digits
+  // Full-height digits, or smaller ones with the date underneath (clock_date).
+  struct ClockLayout { int W, H, T, Y, h1, h2, colon, dot, m1, m2, sec; };
+  static const ClockLayout FULL  = {54, 100, 10, 18,  8, 70, 134, 11, 154, 216, 278};
+  static const ClockLayout SMALL = {46,  82,  9, 10, 14, 68, 120, 10, 138, 192, 248};
+  const ClockLayout &L = settings.clockDate ? SMALL : FULL;
+  const int W = L.W, H = L.H, T = L.T, Y = L.Y;
   // 12-hour clock: 1-12 without a leading zero, AM/PM above the seconds.
   if (settings.clock12h) {
     gfx->setTextSize(2); gfx->setTextColor(COL_SEC);
-    gfx->setCursor(284, Y + 4);
+    gfx->setCursor(L.sec + 6, Y + 4);
     gfx->print(hh < 12 ? "AM" : "PM");
     hh = hh % 12 == 0 ? 12 : hh % 12;
   }
   // HH:MM shifted left to make room for the seconds after the minutes.
-  if (!settings.clock12h || hh >= 10) drawDigit(8, Y, hh/10, W, H, T, COL_TIME);
-  drawDigit(70,  Y, hh%10, W, H, T, COL_TIME);
+  if (!settings.clock12h || hh >= 10) drawDigit(L.h1, Y, hh/10, W, H, T, COL_TIME);
+  drawDigit(L.h2, Y, hh%10, W, H, T, COL_TIME);
   if ((ss%2)==0) {
-    gfx->fillRoundRect(134, Y+28, 11, 11, 5, COL_TIME);
-    gfx->fillRoundRect(134, Y+62, 11, 11, 5, COL_TIME);
+    gfx->fillRoundRect(L.colon, Y + H * 28 / 100, L.dot, L.dot, L.dot / 2, COL_TIME);
+    gfx->fillRoundRect(L.colon, Y + H * 62 / 100, L.dot, L.dot, L.dot / 2, COL_TIME);
   }
-  drawDigit(154, Y, mm/10, W, H, T, COL_TIME);
-  drawDigit(216, Y, mm%10, W, H, T, COL_TIME);
+  drawDigit(L.m1, Y, mm/10, W, H, T, COL_TIME);
+  drawDigit(L.m2, Y, mm%10, W, H, T, COL_TIME);
   // Seconds (same size 3) tucked in behind the minutes, bottom-aligned.
   char sbuf[4];
   snprintf(sbuf, sizeof(sbuf), "%02u", (unsigned)ss);
   gfx->setTextSize(3); gfx->setTextColor(COL_SEC);
-  gfx->setCursor(278, Y + H - 24);
+  gfx->setCursor(L.sec, Y + H - 24);
   gfx->print(sbuf);
+  // The day and date underneath: "SATURDAY 24 OCT", the weekday in its colour.
+  if (settings.clockDate) {
+    static const char *wd[]  = {"SUNDAY","MONDAY","TUESDAY","WEDNESDAY","THURSDAY","FRIDAY","SATURDAY"};
+    static const char *mon[] = {"JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"};
+    int32_t days = clockStartDays + (int32_t)((clockStartSeconds + elapsed) / 86400UL);
+    int32_t year; uint8_t month, day;
+    civilFromDays(days, &year, &month, &day);
+    const char *wday = wd[(days + 4) % 7];
+    char rest[12];
+    snprintf(rest, sizeof(rest), " %u %s", (unsigned)day, mon[month - 1]);
+    int w = (int)(strlen(wday) + strlen(rest)) * 18;   // size 3: 18 px a character
+    int x = (SCREEN_W - w) / 2, y = Y + H + 16;
+    gfx->setTextSize(3);
+    gfx->setTextColor(COL_DATE_WD); gfx->setCursor(x, y); gfx->print(wday);
+    gfx->setTextColor(COL_DATE_BIG); gfx->print(rest);
+  }
   drawPageDots();
 }
 
@@ -2591,6 +2616,7 @@ Settings defaultsFromConfig() {
   d.nightLevel = (uint8_t)constrain(NIGHT_LEVEL, 0, 100);
   d.brightness = (uint8_t)constrain(BRIGHTNESS, 5, 100);
   d.nowFollow  = NOW_FOLLOW;
+  d.clockDate  = CLOCK_DATE;
   return d;
 }
 

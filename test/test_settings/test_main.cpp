@@ -31,6 +31,7 @@ static Settings makeDefaults() {
   s.nightLevel = 20;
   s.brightness = 70;
   s.nowFollow = true;
+  s.clockDate = true;
   return s;
 }
 
@@ -95,7 +96,7 @@ static void test_load_applies_every_key() {
     "\"moon\":false,\"stock\":true,\"github\":true,\"ha\":false,\"now\":true,\"cal\":true,"
     "\"bus\":true,\"fpl\":false,\"mister\":true},"
     "\"bridge_url\":\"http://192.168.86.48:8787\",\"bridge_key\":\"k_1\",\"page_secs\":15,"
-    "\"auto_page\":false,\"clock_format\":\"12h\",\"night_from\":22,\"night_to\":6,\"night_level\":0,\"brightness\":40,\"now_follow\":false}");
+    "\"auto_page\":false,\"clock_format\":\"12h\",\"night_from\":22,\"night_to\":6,\"night_level\":0,\"brightness\":40,\"now_follow\":false,\"clock_date\":false}");
   Settings out; AddedKeys added; JsonDocument inv;
   settingsLoad(makeDefaults(), file.as<JsonVariantConst>(), out, added, inv.to<JsonObject>());
   TEST_ASSERT_EQUAL_STRING("http://192.168.86.48:8787", out.bridgeUrl);
@@ -108,6 +109,7 @@ static void test_load_applies_every_key() {
   TEST_ASSERT_EQUAL(0, out.nightLevel);
   TEST_ASSERT_EQUAL(40, out.brightness);
   TEST_ASSERT_FALSE(out.nowFollow);
+  TEST_ASSERT_FALSE(out.clockDate);
   TEST_ASSERT_FALSE(out.pages[7]);
   TEST_ASSERT_TRUE(out.pages[9]);
   TEST_ASSERT_FALSE(out.pages[11]);
@@ -297,7 +299,8 @@ static void test_load_v1_file_reports_every_new_key() {
   for (const char *k : expected) TEST_ASSERT_TRUE_MESSAGE(hasAdded(added, k), k);
   TEST_ASSERT_TRUE(hasAdded(added, "brightness"));
   TEST_ASSERT_TRUE(hasAdded(added, "now_follow"));
-  TEST_ASSERT_EQUAL(16, added.count);
+  TEST_ASSERT_TRUE(hasAdded(added, "clock_date"));
+  TEST_ASSERT_EQUAL(17, added.count);
   TEST_ASSERT_EQUAL(8, out.pageSecs);
   TEST_ASSERT_EQUAL_STRING("GMT0BST,M3.5.0/1,M10.5.0", out.tzRule);
 }

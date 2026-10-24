@@ -63,7 +63,7 @@ const char *const ALL_KEYS[] = {
   "mount", "theme", "github_user", "tz_name", "tz_rule", "ticker", "stock_key",
   "lat", "lon", "temp_unit", "wind_unit", "pages",
   "bridge_url", "bridge_key", "page_secs", "auto_page", "clock_format",
-  "night_from", "night_to", "night_level", "brightness", "now_follow"};
+  "night_from", "night_to", "night_level", "brightness", "now_follow", "clock_date"};
 
 const char *const PAGE_PATHS[SETTINGS_PAGE_COUNT] = {
   "pages.face", "pages.clock", "pages.date", "pages.weather",
@@ -184,6 +184,8 @@ bool applyKey(const char *key, JsonVariantConst v, Settings &s, const char *&err
     return applyBool(v, s.autoPage, err);
   if (strcmp(key, "now_follow") == 0)
     return applyBool(v, s.nowFollow, err);
+  if (strcmp(key, "clock_date") == 0)
+    return applyBool(v, s.clockDate, err);
   int n = 0;
   if (strcmp(key, "page_secs") == 0) {
     if (!applyInt(v, 3, 120, n, "must be a whole number 3-120", err)) return false;
@@ -300,6 +302,7 @@ void settingsToJson(const Settings &s, JsonObject out) {
   out["night_level"]  = s.nightLevel;
   out["brightness"]   = s.brightness;
   out["now_follow"]   = s.nowFollow;
+  out["clock_date"]   = s.clockDate;
 }
 
 bool wifiValidate(JsonVariantConst wifi, char *ssid, size_t ssidLen,

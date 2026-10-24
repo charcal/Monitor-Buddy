@@ -35,6 +35,7 @@ export const DEFAULTS = Object.freeze({
   night_level: 20,
   brightness: 70,
   now_follow: true,
+  clock_date: true,
 });
 
 // Flows, as spec §4. flash: the flow writes firmware; erase: it erases first.
@@ -267,7 +268,7 @@ export function previewPageFor(key, config) {
     case "tz_name": case "tz_rule": return "clock";
     case "ticker": case "stock_key": case "check.stock": return "stock";
     case "github_user": case "check.github": return "github";
-    case "clock_format": return "clock";
+    case "clock_format": case "clock_date": return "clock";
     case "brightness": return "stay";
     case "now_follow": return "now";
     case "bridge_url": case "bridge_key": case "check.bridge": {

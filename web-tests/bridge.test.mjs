@@ -107,3 +107,11 @@ test("fplCountdown: days and hours, then hours and minutes", () => {
   assert.equal(fplCountdown(t + 2 * 86400 + 4 * 3600 + 600, now), "2D 04H");
   assert.equal(fplCountdown(t + 3 * 3600 + 25 * 60, now), "3H 25M");
 });
+
+test("clock_date puts the date under the clock and hides the Date page", () => {
+  const base = { ...on, pages: { ...on.pages } };
+  assert.ok(!pageList({ ...base, clock_date: true }).includes("date"));
+  assert.ok(pageList({ ...base, clock_date: false }).includes("date"));
+  // With the clock page off, the Date page stays: the date has nowhere else to go.
+  assert.ok(pageList({ ...base, clock_date: true, pages: { ...base.pages, clock: false } }).includes("date"));
+});

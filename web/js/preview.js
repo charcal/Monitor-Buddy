@@ -70,6 +70,7 @@ export function pageList(config) {
     if (key === "github" && !config.github_user) return false;
     if (key === "stock" && !config.stock_key) return false;
     if (BRIDGE_PAGES.includes(key) && !config.bridge_url) return false;
+    if (key === "date" && config.clock_date !== false && pages.clock) return false;   // under the clock
     return true;
   });
   return list.length ? list : ["face"];
@@ -167,23 +168,37 @@ function digit(x, y, n, w, h, t, color) {
 
 const two = (n) => String(n).padStart(2, "0");
 
-function drawClock(c, now, blinkColon, h12 = false) {
+// The FULL and SMALL layouts of drawClock (SMALL: the date underneath).
+const CLOCK_FULL = { W: 54, H: 100, T: 10, Y: 18, h1: 8, h2: 70, colon: 134, dot: 11, m1: 154, m2: 216, sec: 278 };
+const CLOCK_SMALL = { W: 46, H: 82, T: 9, Y: 10, h1: 14, h2: 68, colon: 120, dot: 10, m1: 138, m2: 192, sec: 248 };
+
+function drawClock(c, now, blinkColon, h12 = false, withDate = false) {
   let hh = now.getHours();
   const mm = now.getMinutes();
   const ss = now.getSeconds();
-  const W = 54, H = 100, T = 10, Y = 18;
+  const L = withDate ? CLOCK_SMALL : CLOCK_FULL;
+  const { W, H, T, Y } = L;
   let s = "";
   if (h12) {
-    s += txt(hh < 12 ? "AM" : "PM", 284, Y + 4, 2, c.sec);
+    s += txt(hh < 12 ? "AM" : "PM", L.sec + 6, Y + 4, 2, c.sec);
     hh = hh % 12 === 0 ? 12 : hh % 12;
   }
-  if (!h12 || hh >= 10) s += digit(8, Y, Math.floor(hh / 10), W, H, T, c.time);
-  s += digit(70, Y, hh % 10, W, H, T, c.time);
+  if (!h12 || hh >= 10) s += digit(L.h1, Y, Math.floor(hh / 10), W, H, T, c.time);
+  s += digit(L.h2, Y, hh % 10, W, H, T, c.time);
   if (!blinkColon || ss % 2 === 0) {
-    s += rrect(134, Y + 28, 11, 11, 5, c.time) + rrect(134, Y + 62, 11, 11, 5, c.time);
+    const r = Math.floor(L.dot / 2);
+    s += rrect(L.colon, Y + Math.floor(H * 28 / 100), L.dot, L.dot, r, c.time)
+      + rrect(L.colon, Y + Math.floor(H * 62 / 100), L.dot, L.dot, r, c.time);
   }
-  s += digit(154, Y, Math.floor(mm / 10), W, H, T, c.time) + digit(216, Y, mm % 10, W, H, T, c.time);
-  return s + txt(two(ss), 278, Y + H - 24, 3, c.sec);
+  s += digit(L.m1, Y, Math.floor(mm / 10), W, H, T, c.time) + digit(L.m2, Y, mm % 10, W, H, T, c.time);
+  s += txt(two(ss), L.sec, Y + H - 24, 3, c.sec);
+  if (withDate) {
+    const wday = WEEKDAYS[now.getDay()];
+    const rest = ` ${now.getDate()} ${MONTHS[now.getMonth()]}`;
+    const x = Math.floor((SCREEN_W - textWidth(wday + rest, 3)) / 2);
+    s += txt(wday, x, Y + H + 16, 3, c.dateWd) + txt(rest, x + textWidth(wday, 3), Y + H + 16, 3, c.dateBig);
+  }
+  return s;
 }
 
 const WEEKDAYS = ["SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY"];
@@ -729,7 +744,7 @@ export function createPreview(container) {
       const blink = !reduced();
       const h12 = config.clock_format === "12h";
       const lha = liveBridge(live, "ha"), lnow = liveBridge(live, "now"), lcal = liveBridge(live, "cal");
-      page.innerHTML = key === "clock" ? drawClock(c, now, blink, h12)
+      page.innerHTML = key === "clock" ? drawClock(c, now, blink, h12, config.clock_date !== false)
         : key === "date" ? drawDate(c, now)
         : key === "weather" ? drawWeather(c, config)
         : key === "moon" ? drawMoon(c, now)
