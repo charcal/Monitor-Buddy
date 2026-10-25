@@ -23,15 +23,20 @@ When switched off, hold PWR to switch it back on. It starts on the first screen.
 
 ## The screens
 
-In order: **Headlines** (two at a time, newest first), **Travel** (your next
+In order: **Headlines** (one a screen, big when it is short; the newest two by default), **Travel** (your next
 buses, plus any rail lines with problems), **Calendar** (next three events) and
 **Fantasy PL** (gameweek points, total, league rank, next deadline).
 
 Every screen shows the time it was fetched in the top-right corner, so you know
 how fresh it is. The dots at the bottom show where you are in the cycle.
 
-To change the order, or add a second page of headlines, set `EINK_VIEWS` in the
-bridge's `.env`, for example `EINK_VIEWS=news,news:2,travel,fpl`.
+They use Monitor Buddy's chunky 5x7 pixel font and layout: a small label at the
+top, big values, and secondary text in grey (a fine checkerboard, as e-ink has
+no grey).
+
+To change the order or the number of headlines, set `EINK_VIEWS` in the
+bridge's `.env`, for example `EINK_VIEWS=news,news:2,news:3,travel,fpl`. For
+white on black, like Monitor Buddy on your desk, add `EINK_THEME=dark`.
 
 If the Buddy can't fetch a screen it keeps the last one and adds a black
 **OFFLINE** strip at the bottom, with the reason:
@@ -69,7 +74,7 @@ Open `.env` (`nano .env`) and add these two lines (paste your key after `PHONE_K
 
 ```
 PHONE_KEY=paste-the-key-here
-EINK_VIEWS=news,travel,cal,fpl
+EINK_VIEWS=news,news:2,travel,cal,fpl
 ```
 
 Save (Ctrl+O, Enter, Ctrl+X), then rebuild the bridge:
@@ -193,7 +198,7 @@ goes straight to the hotspot.
                               from the same data as Monitor Buddy's pages
 ```
 
-- **Bridge:** `bridge/eink.py` draws the screens (Pillow, DejaVu Sans Bold).
+- **Bridge:** `bridge/eink.py` draws the screens (Pillow, with Monitor Buddy's 5x7 pixel font from `bridge/pixelfont.py`).
   `GET /eink/frame?v=N&batt=P` returns 5000 raw bytes, the panel's own layout;
   add `fmt=png` to see a picture instead. Response headers `X-View`, `X-Views`
   and `X-View-Name` say which screen it was. The view number wraps round, so the
@@ -205,7 +210,7 @@ goes straight to the hotspot.
 - **Firmware:** `src/phone_buddy/main.cpp`, built with `pio run -e phone-buddy`.
   Settings and the last good screen are kept in flash, so they survive being
   switched off. The few screens the Buddy draws itself (setup, offline, off)
-  use a bitmap font made by `tools/eink_font.py`.
+  use the same pixel font, made into a C header by `tools/eink_font.py`.
 
 ### V2 board pins (from Waveshare's V2 example code)
 

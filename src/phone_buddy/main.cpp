@@ -213,21 +213,24 @@ static void centred(int y, const Font &f, const char *s, bool black = true) {
   drawText((W - textWidth(f, s)) / 2, y, f, s, black);
 }
 
-// A screen of the Buddy's own: a title bar and a few centred lines.
+// A screen of the Buddy's own, in Monitor Buddy's style: a big title and a
+// few centred lines (at most 16 characters each).
 static void notice(const char *title, const char *const lines[], int n) {
   clearFb();
-  fillRect(0, 0, W, 26, true);
-  centred(1, kLarge, title, false);
-  int y = 26 + (H - 26 - n * kSmall.height) / 2;
-  for (int i = 0; i < n; i++, y += kSmall.height) centred(y, kSmall, lines[i]);
+  centred(12, kLarge, title);
+  const int pitch = kSmall.height + 4, top = 44;
+  int y = top + (H - 12 - top - n * pitch) / 2;
+  for (int i = 0; i < n; i++, y += pitch) centred(y, kSmall, lines[i]);
 }
 
 // The OFFLINE strip along the bottom, over the bridge's page dots.
 static void offlineBand(const char *why) {
-  fillRect(0, H - kSmall.height - 1, W, kSmall.height + 1, true);
+  const int h = kSmall.height + 6;
+  fillRect(0, H - h, W, h, true);
   char text[48];
   snprintf(text, sizeof text, "OFFLINE: %s", why);
-  centred(H - kSmall.height, kSmall, text, false);
+  if (textWidth(kSmall, text) > W - 8) snprintf(text, sizeof text, "%s", why);   // just the reason
+  centred(H - h + 3, kSmall, text, false);
 }
 
 // ── Settings and the last good screen (flash, survives power-off) ──
@@ -311,7 +314,7 @@ static void waitForButtonsUp() {
 }
 
 [[noreturn]] static void switchOff() {
-  const char *lines[] = {"HOLD PWR", "TO SWITCH ON"};
+  const char *lines[] = {"HOLD PWR", "TO SWITCH ON"};   // OFF
   notice("OFF", lines, 2);
   epdShow(fb);
   waitForButtonsUp();
@@ -403,10 +406,9 @@ static String esc(const String &s) {
 }
 
 [[noreturn]] static void setupMode() {
-  const char *lines[] = {"ON YOUR PHONE, JOIN", "THE WI-FI NETWORK", AP_NAME, "",
-                         "THE SETUP PAGE OPENS;", "IF NOT, GO TO", "192.168.4.1", "",
-                         "PWR: CANCEL"};
-  notice("SETUP", lines, 9);
+  const char *lines[] = {"ON YOUR PHONE,", "JOIN THE WI-FI", AP_NAME, "",
+                         "IF NO PAGE OPENS", "GO TO", "192.168.4.1", "PWR: CANCEL"};
+  notice("SETUP", lines, 8);
   epdShow(fb);
 
   WiFi.mode(WIFI_AP_STA);
@@ -508,8 +510,8 @@ void setup() {
   } else {
     Serial.printf("offline: %s\n", why.c_str());
     if (!loadLastScreen()) {
-      const char *lines[] = {"COULDN'T GET A SCREEN", "", "PRESS PWR TO TRY AGAIN", "HOLD BOOT FOR SETUP"};
-      notice("PHONE BUDDY", lines, 4);
+      const char *lines[] = {"NO SCREEN YET", "", "PWR: TRY AGAIN", "HOLD BOOT:", "SETUP"};
+      notice("PHONE BUDDY", lines, 5);
     }
     offlineBand(why.c_str());
   }

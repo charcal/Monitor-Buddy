@@ -5,368 +5,422 @@ has to download it and copy it to the panel. Changing a layout here needs no
 reflash. Everything in this module is pure: data in, picture out, so it is
 tested without a network or a device.
 
-    render(view, data, now, batt, page, pages) -> PIL image, 200 x 200, mode "1"
-    panel_bytes(image)                          -> 5000 bytes for the panel
+The look follows Monitor Buddy's pages (web/js/preview.js): its 5x7 pixel font
+at whole-number sizes, a small label at the top, big values, secondary text
+in grey and page dots along the bottom. E-ink has no grey, so grey is a
+checkerboard of the font's pixels.
+
+    render(view, data, now, batt, page, pages, dark) -> PIL image, 200 x 200, mode "1"
+    panel_bytes(image)                                -> 5000 bytes for the panel
 
 Panel byte order (matches Waveshare's V2 driver): row by row from the top,
 25 bytes a row, most significant bit is the leftmost pixel, 1 = white.
 """
 from __future__ import annotations
 
-import os
 from datetime import datetime
-from functools import lru_cache
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
+
+from pixelfont import GLYPHS
 
 W = H = 200
-HEADER = 24            # black title bar
-FOOTER = 14            # page dots; the device draws OFFLINE over this band
-BODY_TOP = HEADER + 4
-BODY_BOTTOM = H - FOOTER - 2
-PAD = 6
-BLACK, WHITE = 0, 1
+M = 10                 # side margin
+TOP = 8                # the label row
+BODY = 32              # where the main content starts
+DOTS_Y = H - 9         # page dots
+BOTTOM = H - 20        # content stops above the dots
+INK, GREY = "ink", "grey"
 
-TITLES = {"news": "HEADLINES", "travel": "TRAVEL", "cal": "CALENDAR", "fpl": "FANTASY PL"}
-
-FONT_DIRS = [os.environ.get("EINK_FONT_DIR", ""), "/usr/share/fonts/truetype/dejavu",
-             "/usr/share/fonts/dejavu", "/usr/share/fonts/TTF"]
+VIEWS = ("news", "travel", "cal", "fpl")
 
 
-@lru_cache(maxsize=64)
-def font(size: int, mono: bool = False) -> ImageFont.ImageFont:
-    name = "DejaVuSansMono-Bold.ttf" if mono else "DejaVuSans-Bold.ttf"
-    for d in FONT_DIRS:
-        path = os.path.join(d, name) if d else ""
-        if path and os.path.exists(path):
-            return ImageFont.truetype(path, size)
-    return ImageFont.load_default(size)   # Pillow's own font, if DejaVu is missing
+# ── Drawing ───────────────────────────────────────────────
 
+class Canvas:
+    """A 200 x 200 page drawn in "ink" (0 = black on paper). `dark` swaps
+    paper and ink at the end, so the drawing code never thinks about it."""
 
-# ── Text helpers ──────────────────────────────────────────
+    def __init__(self):
+        self.img = Image.new("1", (W, H), 1)
+        self.d = ImageDraw.Draw(self.img)
 
-def text_w(f, s: str) -> float:
-    return f.getlength(s)
+    @staticmethod
+    def width(text: str, size: int) -> int:
+        return len(text) * 6 * size
 
+    def text(self, x: int, y: int, text: str, size: int, tone: str = INK):
+        for i, ch in enumerate(text):
+            rows = GLYPHS.get(ch.upper()) or GLYPHS["?"]
+            ox = x + i * 6 * size
+            for r, row in enumerate(rows):
+                for c, bit in enumerate(row):
+                    if bit != "#":
+                        continue
+                    px, py = ox + c * size, y + r * size
+                    if tone == GREY:
+                        for yy in range(py, py + size):
+                            for xx in range(px + (yy + px) % 2, px + size, 2):
+                                self.img.putpixel((xx, yy), 0)
+                    else:
+                        self.d.rectangle((px, py, px + size - 1, py + size - 1), fill=0)
 
-def wrap(f, text: str, width: int) -> list[str]:
-    """Greedy word wrap; a word too long for a line is cut to fit."""
-    lines, line = [], ""
-    for word in text.split():
-        while text_w(f, word) > width:   # very long word: cut it
-            cut = len(word)
-            while cut > 1 and text_w(f, word[:cut]) > width:
-                cut -= 1
-            if line:
-                lines.append(line)
-                line = ""
-            lines.append(word[:cut])
-            word = word[cut:]
-        trial = f"{line} {word}".strip()
-        if text_w(f, trial) <= width:
-            line = trial
+    def right(self, y: int, text: str, size: int, tone: str = INK):
+        self.text(W - M - self.width(text, size), y, text, size, tone)
+
+    def centred(self, y: int, text: str, size: int, tone: str = INK):
+        self.text((W - self.width(text, size)) // 2, y, text, size, tone)
+
+    def dot(self, cx: int, cy: int, r: int, filled: bool = True):
+        box = (cx - r, cy - r, cx + r, cy + r)
+        if filled:
+            self.d.ellipse(box, fill=0)
         else:
-            lines.append(line)
-            line = word
-    if line:
-        lines.append(line)
-    return lines
+            self.d.ellipse(box, outline=0, width=1)
 
 
-def ellipsize(f, s: str, width: int) -> str:
-    if text_w(f, s) <= width:
-        return s
-    while s and text_w(f, s.rstrip() + "...") > width:
-        s = s[:-1]
-    return s.rstrip() + "..."
+def fit_chars(text: str, size: int, width: int) -> str:
+    """`text` cut to what fits `width` at `size`."""
+    return text[: max(0, width // (6 * size))]
 
 
-def fit(text: str, width: int, max_lines: int, sizes=(18, 17, 16, 15, 14, 13)):
-    """The largest size at which `text` wraps into `max_lines`; at the smallest
-    size the last line is cut with '...'. Returns (font, lines)."""
-    for size in sizes:
-        f = font(size)
-        lines = wrap(f, text, width)
-        if len(lines) <= max_lines:
-            return f, lines
-    f = font(sizes[-1])
-    lines = wrap(f, text, width)[:max_lines]
-    lines[-1] = ellipsize(f, lines[-1] + " ...", width) if lines else ""
-    return f, lines
+def fit_size(text: str, width: int, biggest: int, smallest: int = 2) -> int:
+    for s in range(biggest, smallest - 1, -1):
+        if Canvas.width(text, s) <= width:
+            return s
+    return smallest
 
 
-def line_h(f) -> int:
-    a, d = f.getmetrics()
-    return a + d - 1
+def wrap(text: str, cols: int, max_lines: int) -> list[str]:
+    """Monitor Buddy's drawWrapped: word wrap to `cols`, at most `max_lines`,
+    '..' when cut."""
+    out, rest = [], str(text)
+    while len(out) < max_lines and rest:
+        rest = rest.lstrip(" ")
+        take = len(rest)
+        if len(rest) > cols:
+            take = cols
+            while take > 0 and rest[take] != " ":
+                take -= 1
+            if take == 0:
+                take = cols
+        line = rest[:take]
+        if len(out) == max_lines - 1 and take < len(rest):
+            line = line.rstrip()[: cols - 2] + ".."
+        out.append(line.rstrip())
+        rest = rest[take:]
+    return out
 
 
-def draw_lines(d, x, y, f, lines, fill=BLACK) -> int:
-    for ln in lines:
-        d.text((x, y), ln, font=f, fill=fill)
-        y += line_h(f)
-    return y
+def fits(text: str, cols: int, max_lines: int) -> bool:
+    lines = wrap(text, cols, max_lines)
+    return not (lines and lines[-1].endswith("..") and not text.rstrip().endswith(".."))
 
 
-def centre(d, y, s, f, fill=BLACK):
-    d.text(((W - text_w(f, s)) / 2, y), s, font=f, fill=fill)
-
-
-# ── Frame: header, footer ─────────────────────────────────
-
-def battery(d, x, y, pct: int):
-    """A 16 x 9 battery with a nub, filled to `pct`."""
-    d.rectangle((x, y, x + 15, y + 8), outline=WHITE)
-    d.rectangle((x + 16, y + 3, x + 17, y + 5), fill=WHITE)
-    fillw = round(12 * max(0, min(100, pct)) / 100)
-    if fillw:
-        d.rectangle((x + 2, y + 2, x + 1 + fillw, y + 6), fill=WHITE)
-
-
-def frame(title: str, now: datetime, batt: int, page: int, pages: int):
-    img = Image.new("1", (W, H), WHITE)
-    d = ImageDraw.Draw(img)
-    d.rectangle((0, 0, W - 1, HEADER - 1), fill=BLACK)
-    hf = font(14)
-    d.text((PAD, 4), title, font=hf, fill=WHITE)
+def label_row(c: Canvas, label: str, now: datetime):
+    """The top row: the page's label, and the time it was fetched in grey."""
     clock = now.strftime("%H:%M")
-    cx = W - PAD - text_w(hf, clock)
-    d.text((cx, 4), clock, font=hf, fill=WHITE)
-    if batt >= 0:
-        battery(d, int(cx) - 24, 7, batt)
-    # Page dots, so you know where you are in the cycle.
-    if pages > 1:
-        gap = 11
-        x0 = (W - (pages - 1) * gap) / 2
-        y = H - FOOTER / 2 - 1
-        for i in range(pages):
-            x = x0 + i * gap
-            if i == page:
-                d.ellipse((x - 3, y - 3, x + 3, y + 3), fill=BLACK)
-            else:
-                d.ellipse((x - 2, y - 2, x + 2, y + 2), outline=BLACK)
-    return img, d
+    c.right(TOP, clock, 2, GREY)
+    room = W - 2 * M - c.width(clock, 2) - 8
+    c.text(M, TOP, fit_chars(label, 2, room), 2)
 
 
-def message(d, big: str, small: str = "", top: int = BODY_TOP, bottom: int = BODY_BOTTOM):
-    """A centred notice in the body: setup needed, nothing on, can't reach..."""
-    f, lines = fit(big, W - 2 * PAD, 3, (20, 18, 16, 14))
-    sf, slines = fit(small, W - 2 * PAD, 3, (12, 11)) if small else (font(12), [])
-    total = len(lines) * line_h(f) + (6 + len(slines) * line_h(sf) if slines else 0)
+def battery(c: Canvas, pct: int):
+    """A small battery in the bottom-right corner, on the dots' row."""
+    x, y = W - M - 17, DOTS_Y - 4
+    c.d.rectangle((x, y, x + 14, y + 8), outline=0)
+    c.d.rectangle((x + 15, y + 3, x + 16, y + 5), fill=0)
+    fill = round(11 * max(0, min(100, pct)) / 100)
+    if fill:
+        c.d.rectangle((x + 2, y + 2, x + 1 + fill, y + 6), fill=0)
+
+
+def page_dots(c: Canvas, page: int, pages: int):
+    """Monitor Buddy's drawPageDots: a filled dot for this page, rings for the rest."""
+    if pages < 2:
+        return
+    gap = 14
+    x0 = W // 2 - (pages - 1) * gap // 2
+    for i in range(pages):
+        c.dot(x0 + i * gap, DOTS_Y, 3 if i == page else 2, filled=i == page)
+
+
+def message(c: Canvas, big: str, small: str = "", top: int = BODY, bottom: int = BOTTOM):
+    """A centred notice: a big line or three, and a grey explanation."""
+    size = 3 if fits(big, 10, 3) else 2
+    lines = wrap(big, (W - 2 * M) // (6 * size), 3)
+    sub = wrap(small, 15, 3) if small else []
+    pitch = 8 * size + 4
+    total = len(lines) * pitch + (8 + len(sub) * 20 if sub else 0)
     y = top + max(0, (bottom - top - total) // 2)
     for ln in lines:
-        centre(d, y, ln, f)
-        y += line_h(f)
-    y += 6
-    for ln in slines:
-        centre(d, y, ln, sf)
-        y += line_h(sf)
+        c.centred(y, ln, size)
+        y += pitch
+    y += 8
+    for ln in sub:
+        c.centred(y, ln, 2, GREY)
+        y += 20
 
 
-def not_ready(d, data: dict, what: str, setting: str,
-              top: int = BODY_TOP, bottom: int = BODY_BOTTOM) -> bool:
+def not_ready(c: Canvas, data, what: str, setting: str, top: int = BODY, bottom: int = BOTTOM) -> bool:
     """Draws the right notice when `data` isn't usable; True if it did."""
     if not isinstance(data, dict):
-        message(d, f"NO {what}", "", top, bottom)
+        message(c, f"NO {what}", "", top, bottom)
         return True
     if data.get("ok"):
         return False
     if data.get("setup") is False:
-        message(d, f"SET UP {what}", f"ADD {setting} TO THE BRIDGE'S .ENV", top, bottom)
+        message(c, f"SET UP {what}", f"ADD {setting} TO THE BRIDGE", top, bottom)
     else:
-        message(d, f"CAN'T REACH {what}", str(data.get("error") or "").upper(), top, bottom)
+        message(c, f"CAN'T REACH {what}", str(data.get("error") or "").upper(), top, bottom)
     return True
 
 
 # ── Views ─────────────────────────────────────────────────
 
-def age_text(mins: int) -> str:
+def news_age(mins: int) -> str:
+    """Monitor Buddy's newsAge."""
     if mins < 0:
         return ""
-    if mins < 1:
-        return "JUST NOW"
+    if mins < 2:
+        return "NOW"
     if mins < 60:
-        return f"{mins} MIN AGO"
-    if mins < 48 * 60:
-        return f"{mins // 60} HR AGO"
-    return f"{mins // 1440} DAYS AGO"
+        return f"{mins}M AGO"
+    if mins < 1440:
+        return f"{mins // 60}H AGO"
+    return f"{mins // 1440}D AGO"
 
 
-def view_news(d, data: dict, start: int = 0):
-    if not_ready(d, data, "NEWS", "NEWS_FEEDS"):
+def view_news(c: Canvas, data, now: datetime, n: int = 0):
+    """One headline, big when it's short: Monitor Buddy's News page."""
+    items = (data.get("items") or []) if isinstance(data, dict) and data.get("ok") else []
+    n = min(n, len(items) - 1) if items else 0
+    item = items[n] if items else {}
+    label_row(c, item.get("source") or "NEWS", now)
+    if not_ready(c, data, "NEWS", "NEWS_FEEDS"):
         return
-    items = (data.get("items") or [])[start:start + 2]
     if not items:
-        message(d, "NO HEADLINES")
+        message(c, "NO HEADLINES")
         return
-    meta_f = font(11)
-    block = (BODY_BOTTOM - BODY_TOP) // len(items)
-    y = BODY_TOP
-    for n, item in enumerate(items):
-        meta = " · ".join(x for x in (item.get("source", ""), age_text(item.get("age_min", -1))) if x)
-        d.text((PAD, y), meta, font=meta_f, fill=BLACK)
-        room = block - line_h(meta_f) - 3
-        sizes = (18, 17, 16, 15, 14, 13, 12)
-        max_lines = max(1, room // line_h(font(12)))
-        f, lines = None, []
-        for size in sizes:   # biggest size whose wrapped lines fit the block's height
-            f, lines = fit(item.get("title", ""), W - 2 * PAD, max_lines, (size,))
-            if len(lines) * line_h(f) <= room and not lines[-1].endswith("..."):
+    c.text(M, BODY - 4, news_age(item.get("age_min", -1)), 2, GREY)
+    pos = f"{n + 1}/{len(items)}"
+    c.right(BODY - 4, pos, 2, GREY)
+    title = item.get("title", "")
+    big = fits(title, 10, 4)
+    size = 3 if big else 2
+    lines = wrap(title, 10 if big else 15, 4 if big else 6)
+    y = BODY + 22
+    for ln in lines:
+        c.text(M, y, ln, size)
+        y += 8 * size + 4
+
+
+def rail_rows(rail) -> list[tuple[str, str, int]]:
+    if not (isinstance(rail, dict) and rail.get("ok")):
+        return []
+    if rail.get("all_good"):
+        return [("RAIL", "GOOD", 0)]
+    return [(l["name"], l["short"], l["level"]) for l in rail.get("lines", []) if l.get("level", 0) > 0][:3]
+
+
+def view_travel(c: Canvas, bus, rail, now: datetime):
+    """Monitor Buddy's Next bus page, with any rail problems underneath."""
+    label = (bus.get("stop") if isinstance(bus, dict) else "") or "NEXT BUS"
+    label_row(c, label, now)
+    rows = rail_rows(rail)
+    # A row is one line when the name and status fit side by side, else two.
+    heights = [20 if c.width(f"{n} {st}", 2) <= W - 2 * M - 16 else 38 for n, st, _ in rows]
+    rail_top = BOTTOM - sum(heights) + 2
+    bus_bottom = rail_top - 6 if rows else BOTTOM
+    if not not_ready(c, bus, "BUSES", "TFL_STOPS", BODY, bus_bottom):
+        buses = (bus.get("rows") or [])
+        if not buses:
+            message(c, "NO BUSES DUE", "", BODY, bus_bottom)
+        pitch = 42
+        y = BODY + 2
+        for r in buses[:3]:
+            if y + 34 > bus_bottom:
                 break
-        draw_lines(d, PAD, y + line_h(meta_f) + 2, f, lines)
-        y += block
-        if n < len(items) - 1:
-            d.line((PAD, y - 3, W - PAD, y - 3), fill=BLACK)
+            line = str(r.get("line", ""))
+            c.text(M, y + 2, line, 3 if len(line) <= 3 else 2)
+            x = M + 58
+            c.text(x, y, fit_chars(str(r.get("dest", "")), 2, W - M - x), 2, GREY)
+            tx = x
+            for j, m in enumerate((r.get("mins") or [])[:3]):
+                t = "DUE" if m <= 0 else (f"{m} MIN" if j == 0 else str(m))
+                if tx + c.width(t, 2) > W - M:
+                    break
+                c.text(tx, y + 18, t, 2)
+                tx += c.width(t, 2) + 6
+            y += pitch
+    if rows:
+        y = rail_top
+        c.d.line((M, y - 5, W - M, y - 5), fill=0)
+        for (name, short, level), h in zip(rows, heights):
+            c.dot(M + 4, y + 6, 4, filled=level > 0)
+            if level >= 2:   # severe: a square, so it reads differently from delays
+                c.d.rectangle((M, y + 2, M + 8, y + 10), fill=0)
+            tone = GREY if level == 0 else INK
+            c.text(M + 16, y, fit_chars(name, 2, W - 2 * M - 16), 2, tone)
+            c.right(y + h - 20, short, 2, tone)   # same line, or the line below
+            y += h
 
 
-def mins_text(mins: list[int]) -> str:
-    parts = ["DUE" if m == 0 else str(m) for m in mins]
-    return ", ".join(parts) + ("" if parts == ["DUE"] else " MIN")
+def clock_text(epoch: int, tz) -> str:
+    return datetime.fromtimestamp(epoch, tz).strftime("%H:%M")
 
 
-def view_travel(d, bus: dict, rail: dict):
-    y = BODY_TOP
-    rail_rows = []
-    if isinstance(rail, dict) and rail.get("ok"):
-        if rail.get("all_good"):
-            rail_rows = [("RAIL", "GOOD SERVICE", 0)]
-        else:
-            rail_rows = [(l["name"], l["short"], l["level"]) for l in rail.get("lines", [])
-                         if l.get("level", 0) > 0][:3]
-    rail_h = len(rail_rows) * 17 + (4 if rail_rows else 0)
-    bus_bottom = BODY_BOTTOM - rail_h
-
-    if isinstance(bus, dict) and bus.get("ok") and bus.get("rows"):
-        rows = bus["rows"][:3]
-        row_h = min(40, (bus_bottom - y) // len(rows))
-        route_f, dest_f, time_f = font(16), font(11), font(15)
-        for r in rows:
-            line = r.get("line", "")
-            bw = max(36, int(text_w(route_f, line)) + 8)
-            d.rectangle((PAD, y + 2, PAD + bw, y + 24), fill=BLACK)
-            d.text((PAD + (bw - text_w(route_f, line)) / 2, y + 4), line, font=route_f, fill=WHITE)
-            x = PAD + bw + 6
-            d.text((x, y + 1), ellipsize(dest_f, r.get("dest", ""), W - PAD - x), font=dest_f, fill=BLACK)
-            d.text((x, y + 13), ellipsize(time_f, mins_text(r.get("mins", [])), W - PAD - x),
-                   font=time_f, fill=BLACK)
-            y += row_h
-    elif isinstance(bus, dict) and bus.get("ok"):
-        f = font(15)
-        centre(d, (BODY_TOP + bus_bottom) // 2 - 10, "NO BUSES DUE", f)
-    else:   # the rail rows stay visible even when the bus side needs attention
-        not_ready(d, bus, "BUSES", "TFL_STOPS", BODY_TOP, bus_bottom)
-
-    if rail_rows:
-        ry = BODY_BOTTOM - rail_h + 4
-        d.line((PAD, ry - 3, W - PAD, ry - 3), fill=BLACK)
-        f = font(12)
-        for name, short, level in rail_rows:
-            if level >= 2:   # severe: white on black so it jumps out
-                d.rectangle((PAD - 2, ry - 1, W - PAD + 1, ry + 14), fill=BLACK)
-                ink = WHITE
-            else:
-                ink = BLACK
-            d.text((PAD, ry), ellipsize(f, name, 100), font=f, fill=ink)
-            d.text((W - PAD - text_w(f, short), ry), short, font=f, fill=ink)
-            ry += 17
+def cal_heading(e: dict, now: datetime) -> str:
+    """Monitor Buddy's calHeading: NOW UNTIL 15:00, IN 25 MIN, or the day and time."""
+    t = int(now.timestamp())
+    if not e.get("all_day") and e.get("start") and e.get("end"):
+        if e["start"] <= t < e["end"]:
+            return f"NOW UNTIL {clock_text(e['end'], now.tzinfo)}"
+        mins = (e["start"] - t + 59) // 60
+        if 0 < mins <= 60:
+            return f"IN {mins} MIN"
+    return e.get("label", "")
 
 
-def view_cal(d, data: dict):
-    if not_ready(d, data, "CALENDAR", "CAL_ICS_URLS"):
+def view_cal(c: Canvas, data, now: datetime):
+    """Monitor Buddy's Calendar page: the next event big, then two more."""
+    events = []
+    if isinstance(data, dict) and data.get("ok"):
+        t = int(now.timestamp())
+        events = [e for e in data.get("events") or [] if not e.get("end") or e["end"] > t][:3]
+    label_row(c, cal_heading(events[0], now) if events else "CALENDAR", now)
+    if not_ready(c, data, "CALENDAR", "CAL_ICS_URLS"):
         return
-    events = (data.get("events") or [])[:3]
     if not events:
-        message(d, "NOTHING ON", "NO EVENTS IN THE NEXT FEW DAYS")
+        message(c, "NO EVENTS", "COMING UP THIS WEEK")
         return
-    label_f = font(11)
-    block = (BODY_BOTTOM - BODY_TOP) // len(events)
-    y = BODY_TOP
-    for e in events:
-        label = e.get("label", "")
-        lw = int(text_w(label_f, label)) + 6
-        d.rectangle((PAD, y, PAD + lw, y + 13), fill=BLACK)
-        d.text((PAD + 3, y + 1), label, font=label_f, fill=WHITE)
-        room = block - 18
-        max_lines = max(1, room // line_h(font(13)))
-        f, lines = fit(e.get("title", ""), W - 2 * PAD, min(2, max_lines), (17, 16, 15, 14, 13))
-        draw_lines(d, PAD, y + 16, f, lines)
-        y += block
+    y = BODY
+    for ln in wrap(events[0].get("title", ""), 10, 2):
+        c.text(M, y, ln, 3)
+        y += 28
+    y = max(y + 6, BODY + 50)
+    for e in events[1:]:
+        if y + 38 > BOTTOM:
+            break
+        day = "TMRW" if e.get("day") == "TOMORROW" else e.get("day", "")
+        when = day if e.get("all_day") else (e.get("time", "") if day == "TODAY" else f"{day} {e.get('time', '')}")
+        c.text(M, y, when.strip(), 2, GREY)
+        c.text(M, y + 18, fit_chars(e.get("title", ""), 2, W - 2 * M), 2)
+        y += 44
+
+
+def format_count(n: int) -> str:
+    """Monitor Buddy's formatCount: 845K, 1.2M."""
+    n = max(0, int(n))
+    if n < 100000:
+        return str(n)
+    if n < 1000000:
+        return f"{n // 1000}K"
+    if n < 10000000:
+        tenths = n // 100000
+        return f"{tenths // 10}.{tenths % 10}M"
+    return f"{n // 1000000}M"
+
+
+def fpl_countdown(deadline: int, now: datetime) -> str:
+    """Monitor Buddy's fplCountdown: 2D 04H, or 3H 25M."""
+    left = deadline - int(now.timestamp())
+    d, h, m = left // 86400, left // 3600 % 24, left // 60 % 60
+    return f"{d}D {h:02d}H" if d > 0 else f"{h}H {m:02d}M"
 
 
 def deadline_text(epoch: int, now: datetime) -> str:
+    """Kept for anything that wants plain words: IN 1H 30M, or SAT 11:00."""
     if not epoch:
         return ""
-    when = datetime.fromtimestamp(epoch, now.tzinfo)
     left = epoch - int(now.timestamp())
     if left <= 0:
         return ""
     if left < 86400:
         h, m = divmod(left // 60, 60)
         return f"IN {h}H {m:02d}M" if h else f"IN {m} MIN"
-    return when.strftime("%a %H:%M").upper()
+    return datetime.fromtimestamp(epoch, now.tzinfo).strftime("%a %H:%M").upper()
 
 
-def view_fpl(d, data: dict, now: datetime):
-    if not_ready(d, data, "FANTASY PL", "FPL_TEAM_ID"):
+def view_fpl(c: Canvas, data, now: datetime):
+    """Monitor Buddy's Fantasy PL page: big gameweek points, or the countdown
+    to the next deadline, with rank and total underneath."""
+    f = data if isinstance(data, dict) else {}
+    t = int(now.timestamp())
+    countdown = f.get("ok") and not f.get("live") and f.get("next_gw") and (f.get("deadline") or 0) > t
+    if countdown:
+        label_row(c, f"GW{f['next_gw']} IN", now)   # reads "GW10 IN / 2D 04H"
+    elif f.get("ok") and f.get("gw"):
+        label_row(c, f"GW{f['gw']} LIVE" if f.get("live") else f"GW{f['gw']}", now)
+        if f.get("live"):
+            c.dot(M + c.width(f"GW{f['gw']} LIVE", 2) + 8, TOP + 6, 4)
+    else:
+        label_row(c, "FANTASY PL", now)
+    if not_ready(c, data, "FANTASY PL", "FPL_TEAM_ID"):
         return
-    small, mid = font(11), font(14)
-    y = BODY_TOP
-    team = data.get("team", "")
-    if team:
-        centre(d, y, ellipsize(small, team, W - 2 * PAD), small)
-        y += 14
-    gw = data.get("gw") or 0
-    label = f"GAMEWEEK {gw}" + (" · LIVE" if data.get("live") else "") if gw else "SEASON NOT STARTED"
-    centre(d, y, label, small)
-    y += 12
-    big = font(40)
-    pts = str(data.get("gw_points", 0))
-    centre(d, y, pts, big)
-    y += line_h(big) - 2
-    centre(d, y, "POINTS", small)
-    y += 15
-    rows = [("TOTAL", f"{data.get('total', 0):,}"),
-            ("RANK" if data.get("league") == "OVERALL" else ellipsize(mid, data.get("league", "RANK"), 130),
-             f"{data.get('rank', 0):,}")]
-    dl = deadline_text(data.get("deadline", 0), now)
-    if dl and data.get("next_gw"):
-        rows.append((f"GW{data['next_gw']} DEADLINE", dl))
-    for k, v in rows:
-        if y + line_h(mid) > BODY_BOTTOM:
-            break
-        f = small if "DEADLINE" in k else mid
-        d.text((PAD, y + (3 if f is small else 0)), k, font=small if f is small else f, fill=BLACK)
-        d.text((W - PAD - text_w(mid, v), y), v, font=mid, fill=BLACK)
-        y += line_h(mid) + 1
+    if countdown:
+        cd = fpl_countdown(f["deadline"], now)
+        c.text(M, BODY + 4, cd, fit_size(cd, W - 2 * M, 4))
+        if f.get("gw"):
+            c.text(M, BODY + 44, f"GW{f['gw']} {f.get('gw_points', 0)} PTS", 2, GREY)
+    elif f.get("gw"):
+        pts = str(f.get("gw_points", 0))
+        ps = fit_size(pts, 120, 7)
+        c.text(M, BODY, pts, ps)
+        c.text(M + c.width(pts, ps) + 6, BODY + 8 * ps - 16, "PTS", 2, GREY)
+    else:
+        message(c, "NO GAMEWEEK", "", BODY, BODY + 60)
+    y = 106
+    rank = format_count(f.get("rank") or 0)
+    total = str(f.get("total") or 0)
+    rx = W // 2 + 4
+    c.text(M, y, "RANK", 2, GREY)
+    c.text(M, y + 18, rank, fit_size(rank, rx - M - 6, 3))
+    c.text(rx, y, "TOTAL", 2, GREY)
+    c.text(rx, y + 18, total, fit_size(total, W - M - rx, 3))
+    league = f.get("league") or ""
+    name = league if league and league != "OVERALL" else (f.get("team") or "")
+    c.text(M, y + 50, fit_chars(name, 2, W - 2 * M), 2, GREY)
 
 
 # ── Entry points ──────────────────────────────────────────
 
 def parse_views(spec: str) -> list[str]:
-    """EINK_VIEWS, e.g. 'news,news:2,travel,cal,fpl'. Unknown names are dropped."""
+    """EINK_VIEWS, e.g. 'news,news:2,travel,cal,fpl'. news:2 is the second
+    headline. Unknown names are dropped."""
     out = []
     for v in (spec or "").split(","):
         v = v.strip().lower()
-        if v.split(":")[0] in TITLES:
+        if v.split(":")[0] in VIEWS:
             out.append(v)
-    return out or ["news", "travel", "cal", "fpl"]
+    return out or ["news", "news:2", "travel", "cal", "fpl"]
 
 
-def render(view: str, data: dict, now: datetime, batt: int = -1, page: int = 0, pages: int = 1):
+def render(view: str, data: dict, now: datetime, batt: int = -1, page: int = 0, pages: int = 1,
+           dark: bool = False):
     """`data` holds the bridge's JSON for the sources this view uses:
     news -> data['news']; travel -> data['bus'], data['rail']; cal -> data['cal'];
     fpl -> data['fpl']."""
     name, _, arg = view.partition(":")
-    img, d = frame(TITLES.get(name, name.upper()), now, batt, page, pages)
+    c = Canvas()
     if name == "news":
-        view_news(d, data.get("news"), int(arg) if arg.isdigit() else 0)
+        view_news(c, data.get("news"), now, max(0, int(arg) - 1) if arg.isdigit() else 0)
     elif name == "travel":
-        view_travel(d, data.get("bus"), data.get("rail"))
+        view_travel(c, data.get("bus"), data.get("rail"), now)
     elif name == "cal":
-        view_cal(d, data.get("cal"))
+        view_cal(c, data.get("cal"), now)
     elif name == "fpl":
-        view_fpl(d, data.get("fpl"), now)
+        view_fpl(c, data.get("fpl"), now)
     else:
-        message(d, "UNKNOWN VIEW", view.upper())
+        label_row(c, "PHONE BUDDY", now)
+        message(c, "UNKNOWN VIEW", view.upper())
+    page_dots(c, page, pages)
+    if batt >= 0:
+        battery(c, batt)
+    img = c.img
+    if dark:
+        from PIL import ImageChops
+        img = ImageChops.invert(img.convert("L")).convert("1")
     return img
 
 

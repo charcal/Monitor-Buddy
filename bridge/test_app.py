@@ -475,7 +475,7 @@ def test_eink_panel_bytes_layout():
 
 def test_eink_views_parse():
     import eink
-    assert eink.parse_views("") == ["news", "travel", "cal", "fpl"]
+    assert eink.parse_views("") == ["news", "news:2", "travel", "cal", "fpl"]
     assert eink.parse_views("news, news:2,bogus,FPL") == ["news", "news:2", "fpl"]
 
 
@@ -501,9 +501,9 @@ def test_eink_renders_every_view_and_failure():
 def test_eink_frame_route_and_keys(bridge, monkeypatch):
     monkeypatch.setattr(bridge, "fetch_news", lambda: {"ok": True, "items": []})
     c = bridge.app.test_client()
-    r = c.get("/eink/frame?v=4&batt=80")          # 4 views -> wraps to view 0
+    r = c.get("/eink/frame?v=5&batt=80")          # 5 views -> wraps to view 0
     assert r.status_code == 200 and len(r.data) == 5000
-    assert r.headers["X-View"] == "0" and r.headers["X-Views"] == "4" and r.headers["X-View-Name"] == "news"
+    assert r.headers["X-View"] == "0" and r.headers["X-Views"] == "5" and r.headers["X-View-Name"] == "news"
     assert c.get("/eink/frame?fmt=png").data[:4] == b"\x89PNG"
     # Through Tailscale Funnel with no key set: refused.
     assert c.get("/eink/frame", headers={"Tailscale-Funnel-Request": "?1"}).status_code == 401
@@ -527,3 +527,19 @@ def test_news_recovers_from_dead_connection_and_keeps_last_good(bridge, monkeypa
     monkeypatch.setattr(bridge.requests, "get", dead)
     out = bridge.fetch_news()
     assert out["ok"] and out["items"][0]["title"] == "MADE UP HEADLINE"
+
+
+def test_eink_pixel_font_and_views(bridge):
+    import eink
+    from zoneinfo import ZoneInfo
+    now = datetime(2026, 10, 25, 14, 22, tzinfo=ZoneInfo("Europe/London"))
+    assert eink.wrap("ONE TWO THREE FOUR", 9, 2) == ["ONE TWO", "THREE.."]
+    assert eink.format_count(845210) == "845K" and eink.fpl_countdown(int(now.timestamp()) + 2 * 86400 + 4 * 3600, now) == "2D 04H"
+    t = int(now.timestamp())
+    assert eink.cal_heading({"start": t + 25 * 60, "end": t + 3600, "label": "X"}, now) == "IN 25 MIN"
+    news = {"news": {"ok": True, "items": [{"title": "FIRST", "source": "A", "age_min": 1},
+                                           {"title": "SECOND", "source": "B", "age_min": 90}]}}
+    one, two = (eink.render(v, news, now) for v in ("news", "news:2"))
+    assert one.tobytes() != two.tobytes()
+    light, dark = eink.render("news", news, now), eink.render("news", news, now, dark=True)
+    assert all(a ^ b == 0xFF for a, b in zip(eink.panel_bytes(light), eink.panel_bytes(dark)))

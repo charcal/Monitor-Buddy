@@ -987,7 +987,8 @@ def api_summary():
 
 # ── Phone Buddy (e-ink) ───────────────────────────────────
 # EINK_VIEWS: the screens the side button steps through, in order:
-# news, news:2 (the next two headlines), travel (buses and rail), cal, fpl.
+# news (the newest headline), news:2 (the second), travel (buses and rail), cal, fpl.
+# EINK_THEME=dark: white on black, like Monitor Buddy. The default is black on white.
 
 EINK_SOURCES = {
     "news": lambda: {"news": cache.get("news", 120, lambda: _safe(fetch_news))},
@@ -1012,7 +1013,8 @@ def eink_frame():
     batt = max(-1, min(100, _int_arg("batt", -1)))
     view = views[page]
     data = EINK_SOURCES[view.split(":")[0]]()
-    img = eink.render(view, data, datetime.now(TZ), batt, page, len(views))
+    img = eink.render(view, data, datetime.now(TZ), batt, page, len(views),
+                      dark=env("EINK_THEME").lower() == "dark")
     headers = {"X-View": str(page), "X-Views": str(len(views)), "X-View-Name": view}
     if request.args.get("fmt") == "png":
         import io
