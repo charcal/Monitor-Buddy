@@ -500,6 +500,8 @@ def test_eink_renders_every_view_and_failure():
 
 def test_eink_frame_route_and_keys(bridge, monkeypatch):
     monkeypatch.setattr(bridge, "fetch_news", lambda: {"ok": True, "items": []})
+    # Never the live TfL service: real rail problems would add a Travel screen.
+    monkeypatch.setattr(bridge, "fetch_rail", lambda entries=None: {"ok": True, "all_good": True, "lines": []})
     c = bridge.app.test_client()
     r = c.get("/eink/frame?v=5&batt=80")   # everything empty: just the first screen, wrapped to
     assert r.status_code == 200 and len(r.data) == 5000
