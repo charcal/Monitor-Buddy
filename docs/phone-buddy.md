@@ -171,16 +171,22 @@ Funnel keeps running after a restart. To turn it off:
 
 ### 3. Get the firmware onto the board
 
-1. On GitHub, open **Releases** in the fork and download
-   `phone-buddy-<version>.bin` from the newest release. (It's built
-   automatically when a release is published, next to the Monitor Buddy file.)
-2. Plug the board into your Mac with a USB-C data cable.
-3. In Chrome, open **https://espressif.github.io/esptool-js/**.
-4. Click **Connect** and pick the port (usually "USB JTAG/serial debug unit").
-   If nothing shows up: unplug, hold **BOOT**, plug back in, let go, and try again.
-5. The first time only, click **Erase Flash** and wait for it to finish.
-6. Set **Flash Address** to `0x0`, choose the `.bin` you downloaded, click **Program**.
-7. When it finishes, press the reset button on the board (or unplug and replug).
+Your CasaOS flasher has a Phone Buddy page that picks up each release's
+`phone-buddy-<version>.bin` by itself (the sync container mirrors it, like
+Monitor Buddy's firmware).
+
+1. Plug the board into your Mac with a USB-C data cable.
+2. In Chrome, open **https://192.168.86.48:9443/phone.html** (or the link at the
+   bottom of the main flasher).
+3. The first time, tick **Erase the board first**. Leave it unticked for
+   updates, so the Wi-Fi and bridge settings are kept.
+4. Click **Connect and install**, pick the port, and wait for "Done".
+
+If no port shows up: unplug, hold **BOOT**, plug back in, let go, and try
+again; afterwards press the reset button (or unplug and replug).
+
+Without the CasaOS flasher, download `phone-buddy-<version>.bin` from the
+release and write it at address `0x0` with **https://espressif.github.io/esptool-js/**.
 
 **Check:** the screen shows **SETUP**. (With no settings yet, it goes straight there.)
 

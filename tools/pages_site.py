@@ -65,6 +65,20 @@ def release_entry(tag, published_at, prerelease, data, cfg_v):
             "notes": f"{REPO_URL}/releases/tag/{tag}"}
 
 
+def phone_asset_name(version):
+    """Phone Buddy (the pocket e-ink one), attached to the same releases."""
+    return f"phone-buddy-{version}.bin"
+
+
+def phone_entry(tag, published_at, prerelease, data):
+    """One row of firmware/phone.json: like release_entry, without settings."""
+    version = tag[1:]
+    return {"version": version, "date": published_at[:10], "prerelease": bool(prerelease),
+            "file": f"firmware/{tag}/{phone_asset_name(version)}", "size": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "notes": f"{REPO_URL}/releases/tag/{tag}"}
+
+
 def build_manifest(entries):
     """`entries` newest first. latest is the newest final release, or None while
     only release candidates exist. `format` is the schema version, so the shape

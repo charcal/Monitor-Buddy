@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>Phone Buddy flasher</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23111'/%3E%3Crect x='6' y='9' width='8' height='14' rx='3' fill='%23fff'/%3E%3Crect x='18' y='9' width='8' height='14' rx='3' fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="css/app.css">
+  <style>
+    .pb { display: grid; gap: 1rem; max-width: 40rem; margin: 0 auto; }
+    .pb h1 { margin: 0 0 0.25rem; font-size: 1.4rem; }
+    .pb h2 { margin: 0 0 0.75rem; font-size: 1.1rem; }
+    .pb p { margin: 0.4rem 0; }
+    .pb .row { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; margin: 0.75rem 0; }
+    .pb select { font: inherit; padding: 0.45rem 0.6rem; border-radius: 10px;
+      background: var(--input); color: var(--fg); border: 1px solid var(--border-strong); }
+    .pb label.check-row { display: flex; gap: 0.6rem; align-items: flex-start; margin: 0.75rem 0; }
+    .pb label.check-row input { margin-top: 0.3rem; }
+    .pb .muted { color: var(--muted); font-size: 0.9rem; }
+    .pb .ok { color: var(--ok); font-weight: 600; }
+    .pb .bad { color: var(--danger); font-weight: 600; }
+    .pb .progress { width: 100%; margin-top: 0.75rem; }
+    .pb ol { margin: 0.4rem 0; padding-left: 1.4rem; }
+  </style>
+</head>
+<body>
+  <header class="top">
+    <div class="top__inner">
+      <span class="logo" aria-hidden="true"><i></i><i></i></span>
+      <span class="top__text">
+        <span class="top__name">Phone Buddy flasher</span>
+        <span class="top__tagline">For the pocket e-ink Buddy (Waveshare ESP32-S3-ePaper-1.54 V2)</span>
+      </span>
+    </div>
+  </header>
+  <main id="main" class="page pb">
+    <div id="unsupported" class="card" hidden>
+      <h2>This browser can't talk to the Buddy</h2>
+      <p>Flashing needs Web Serial: use Chrome or Edge on a computer (not a phone or tablet).</p>
+    </div>
+
+    <section class="card" id="install">
+      <h1>Install or update</h1>
+      <p class="muted">Plug the Buddy into this computer with a USB-C data cable, then press the button.</p>
+      <div class="row">
+        <label for="version">Version</label>
+        <select id="version"></select>
+        <a id="notes" class="muted" href="#" target="_blank" rel="noopener">Release notes</a>
+      </div>
+      <label class="check-row">
+        <input type="checkbox" id="erase">
+        <span>Erase the board first<br><span class="muted">For a new board, or if it misbehaves. This also clears
+          the Wi-Fi networks, bridge address and key saved on it, so it will start in setup.</span></span>
+      </label>
+      <div class="row">
+        <button id="go" class="btn btn--primary btn--big" type="button" disabled>Connect and install</button>
+      </div>
+      <p id="status" role="status" aria-live="polite"></p>
+      <progress id="bar" class="progress" max="100" value="0" hidden></progress>
+      <details class="log">
+        <summary>Details</summary>
+        <pre id="log" class="log__lines"></pre>
+      </details>
+    </section>
+
+    <section class="card">
+      <h2>If the Buddy doesn't show up</h2>
+      <ol>
+        <li>Try another cable: some only charge.</li>
+        <li>Unplug the Buddy, hold <strong>BOOT</strong>, plug it back in, let go, and press the button again.</li>
+        <li>After installing in that mode, press the Buddy's reset button (or unplug and replug) to start it.</li>
+      </ol>
+      <p class="muted">Monitor Buddy, the desk one, is flashed from <a href="./">the main flasher</a>.</p>
+    </section>
+  </main>
+  <script type="module" src="js/phone.js"></script>
+</body>
+</html>

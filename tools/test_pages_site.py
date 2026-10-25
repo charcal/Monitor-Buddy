@@ -332,3 +332,12 @@ class StampAssets(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PhoneBuddy(unittest.TestCase):
+    def test_entry(self):
+        e = ps.phone_entry("v1.10.0", "2026-10-25T15:54:00Z", False, b"abc")
+        self.assertEqual(e["file"], "firmware/v1.10.0/phone-buddy-1.10.0.bin")
+        self.assertEqual((e["version"], e["date"], e["size"], e["prerelease"]), ("1.10.0", "2026-10-25", 3, False))
+        self.assertEqual(e["sha256"], hashlib.sha256(b"abc").hexdigest())
+        self.assertEqual(ps.build_manifest([e])["latest"], "1.10.0")

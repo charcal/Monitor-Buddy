@@ -6,7 +6,8 @@ Every SYNC_MINUTES it:
   2. builds the site from its web/ folder the way GitHub Pages does,
      using the fork's own tools/pages_site.py (asset stamping, manifest format),
   3. mirrors the monitor-buddy-<version>.bin of every release from 1.2.0 on
-     into firmware/ and writes firmware/releases.json,
+     into firmware/ and writes firmware/releases.json, and the same for
+     Phone Buddy's phone-buddy-<version>.bin into firmware/phone.json,
   4. writes site.json (the repo, and the bridge address the Buddy should use),
   5. switches /site/current to the new build in one step.
 
@@ -92,8 +93,8 @@ def load_pages_site(src: Path):
         sys.path.pop(0)
 
 
-def firmware_for(ps, tag: str, release: dict) -> bytes | None:
-    name = ps.asset_name(tag[1:])
+def firmware_for(ps, tag: str, release: dict, name: str | None = None) -> bytes | None:
+    name = name or ps.asset_name(tag[1:])
     asset = next((a for a in release.get("assets", []) if a.get("name") == name), None)
     if asset is None:
         log(f"skipping {tag}: no {name} attached")
@@ -151,9 +152,22 @@ def build(sha: str, releases: list[dict]) -> Path:
                                             cfg_version(ps, tag)))
         (out / "firmware").mkdir(exist_ok=True)
         (out / "firmware" / "releases.json").write_text(json.dumps(ps.build_manifest(entries), indent=1))
+        # Phone Buddy: releases from when it was added carry its file too.
+        phone = []
+        if hasattr(ps, "phone_asset_name"):
+            for tag, row in ps.select(rows):
+                name = ps.phone_asset_name(tag[1:])
+                if not any(a.get("name") == name for a in by_tag[tag].get("assets", [])):
+                    continue
+                data = firmware_for(ps, tag, by_tag[tag], name)
+                dest = out / "firmware" / tag
+                dest.mkdir(parents=True, exist_ok=True)
+                (dest / name).write_bytes(data)
+                phone.append(ps.phone_entry(tag, row["publishedAt"], row["isPrerelease"], data))
+        (out / "firmware" / "phone.json").write_text(json.dumps(ps.build_manifest(phone), indent=1))
         (out / "site.json").write_text(json.dumps({"repo": REPO, "ref": REF, "commit": sha,
                                                    "bridge_device_url": BRIDGE_DEVICE_URL}, indent=1))
-        log(f"{len(entries)} firmware release(s) mirrored")
+        log(f"{len(entries)} firmware release(s) mirrored, {len(phone)} with Phone Buddy")
         return out
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
