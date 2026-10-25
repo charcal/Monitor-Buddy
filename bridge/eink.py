@@ -33,6 +33,7 @@ BOTTOM = H - 20        # content stops above the dots
 INK, GREY = "ink", "grey"
 
 VIEWS = ("news", "travel", "cal", "fpl")
+LOW_BATTERY = 15       # percent: the bottom strip asks to be charged
 
 
 # ── Drawing ───────────────────────────────────────────────
@@ -514,9 +515,17 @@ def render(view: str, data: dict, now: datetime, batt: int = -1, page: int = 0, 
     else:
         label_row(c, "PHONE BUDDY", now)
         message(c, "UNKNOWN VIEW", view.upper())
-    page_dots(c, page, pages)
-    if batt >= 0:
-        battery(c, batt)
+    if 0 <= batt <= LOW_BATTERY:   # a black strip over the dots, like the Buddy's OFFLINE one
+        c.d.rectangle((0, H - 20, W - 1, H - 1), fill=0)
+        text = f"BATTERY LOW {batt}%"
+        inv = Canvas()
+        inv.centred(0, text, 2)
+        strip = inv.img.crop((0, 0, W, 14))
+        c.img.paste(Image.eval(strip.convert("L"), lambda v: 255 - v).convert("1"), (0, H - 17))
+    else:
+        page_dots(c, page, pages)
+        if batt >= 0:
+            battery(c, batt)
     img = c.img
     if dark:
         from PIL import ImageChops

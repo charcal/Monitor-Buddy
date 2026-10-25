@@ -611,3 +611,14 @@ def test_eink_skips_empty_screens_and_picks_the_first():
     # Rail problems keep travel even with no buses.
     rail = dict(data, rail={"ok": True, "all_good": False, "lines": [{"name": "ELIZ", "short": "DELAYS", "level": 1}]})
     assert "travel" in eink.arrange(views, rail, sunday, commute)
+
+
+def test_eink_low_battery_strip():
+    import eink
+    from zoneinfo import ZoneInfo
+    now = datetime(2026, 10, 25, 14, 22, tzinfo=ZoneInfo("Europe/London"))
+    news = {"news": {"ok": True, "items": [{"title": "A", "source": "B", "age_min": 1}]}}
+    low = eink.render("news", news, now, batt=12)
+    ok = eink.render("news", news, now, batt=80)
+    bottom = lambda im: im.crop((0, 185, 200, 200)).convert("L").tobytes()
+    assert sum(v == 0 for v in bottom(low)) > sum(v == 0 for v in bottom(ok)) * 4   # mostly black

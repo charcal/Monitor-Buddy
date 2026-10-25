@@ -60,6 +60,13 @@ static const char *AP_NAME = "Phone-Buddy";
 // Kept through deep sleep (lost when switched off, which is fine).
 RTC_DATA_ATTR static int rtcView = 0;
 RTC_DATA_ATTR static int rtcLastNet = 0;
+// What the panel shows now, for fast (partial) refreshes: the controller needs
+// the old picture as well as the new one, and loses both when its power is cut.
+RTC_DATA_ATTR static uint8_t rtcShown[W * H / 8];
+RTC_DATA_ATTR static bool rtcShownValid = false;
+RTC_DATA_ATTR static uint8_t rtcPartials = 0;
+static const uint8_t FULL_EVERY = 10;   // a full refresh now and then clears ghosting
+static const int BATT_EMPTY = 3;        // percent: switch off to protect the battery
 
 static uint8_t fb[FB_LEN];   // 1 = white, row-major, MSB = leftmost pixel
 static Preferences prefs;
@@ -93,6 +100,28 @@ static const uint8_t LUT_FULL[159] = {
   0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x0, 0x0, 0x0,
   0x22, 0x17, 0x41, 0x0, 0x32, 0x20};
 
+// Waveshare's V2 partial-refresh waveform: no black-white flash, about 0.5 s.
+static const uint8_t LUT_PARTIAL[159] = {
+  0x0, 0x40, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+  0x80, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+  0x40, 0x40, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+  0x0, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+  0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+  0xF, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+  0x1, 0x1, 0x0, 0x0, 0x0, 0x0, 0x0,
+  0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+  0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+  0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+  0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+  0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+  0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+  0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+  0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+  0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+  0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+  0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x0, 0x0, 0x0,
+  0x02, 0x17, 0x41, 0xB0, 0x32, 0x28};
+
 static SPIClass epdSpi(FSPI);
 
 static void epdWait() {
@@ -121,7 +150,25 @@ static void epdBytes(const uint8_t *p, size_t n) {
   digitalWrite(PIN_EPD_CS, HIGH);
 }
 
-static void epdShow(const uint8_t *buf) {
+static void epdLut(const uint8_t *lut) {
+  epdCmd(0x32); epdBytes(lut, 153);
+  epdWait();
+  epdCmd(0x3F); epdData(lut[153]);
+  epdCmd(0x03); epdData(lut[154]);
+  epdCmd(0x04); epdData(lut[155]); epdData(lut[156]); epdData(lut[157]);
+  epdCmd(0x2C); epdData(lut[158]);
+}
+
+static void epdCursor() {
+  epdCmd(0x4E); epdData(0x00);
+  epdCmd(0x4F); epdData(H - 1); epdData(0x00);
+}
+
+// Shows `buf`. A fast partial refresh when the panel's current picture is
+// known (kept through deep sleep), else, every FULL_EVERY times, or when
+// `full` is asked for, a full refresh with the usual flash.
+static void epdShow(const uint8_t *buf, bool full = false) {
+  bool partial = !full && rtcShownValid && rtcPartials + 1 < FULL_EVERY;
   digitalWrite(PIN_EPD_PWR, LOW);   // panel on
   delay(10);
   pinMode(PIN_EPD_CS, OUTPUT);
@@ -146,21 +193,33 @@ static void epdShow(const uint8_t *buf) {
   epdCmd(0x18); epdData(0x80);      // internal temperature sensor
   epdCmd(0x22); epdData(0xB1);      // load temperature and waveform
   epdCmd(0x20);
-  epdCmd(0x4E); epdData(0x00);      // cursor X
-  epdCmd(0x4F); epdData(H - 1); epdData(0x00);                 // cursor Y
+  epdCursor();
   epdWait();
-  epdCmd(0x32); epdBytes(LUT_FULL, 153);
-  epdWait();
-  epdCmd(0x3F); epdData(LUT_FULL[153]);
-  epdCmd(0x03); epdData(LUT_FULL[154]);
-  epdCmd(0x04); epdData(LUT_FULL[155]); epdData(LUT_FULL[156]); epdData(LUT_FULL[157]);
-  epdCmd(0x2C); epdData(LUT_FULL[158]);
 
-  epdCmd(0x24); epdBytes(buf, FB_LEN);   // new picture
-  epdCmd(0x26); epdBytes(buf, FB_LEN);   // and as the "previous" one
-  epdCmd(0x22); epdData(0xC7);           // full refresh
-  epdCmd(0x20);
-  epdWait();
+  if (partial) {
+    epdLut(LUT_PARTIAL);
+    epdCmd(0x37);                         // as Waveshare's partial init
+    for (int i = 0; i < 10; i++) epdData(i == 5 ? 0x40 : 0x00);
+    epdCmd(0x3C); epdData(0x80);          // border
+    epdCmd(0x22); epdData(0xC0); epdCmd(0x20);
+    epdWait();
+    epdCursor(); epdCmd(0x26); epdBytes(rtcShown, FB_LEN);   // what's there now
+    epdCursor(); epdCmd(0x24); epdBytes(buf, FB_LEN);        // what it becomes
+    epdCmd(0x22); epdData(0xCF);          // partial refresh
+    epdCmd(0x20);
+    epdWait();
+    rtcPartials++;
+  } else {
+    epdLut(LUT_FULL);
+    epdCursor(); epdCmd(0x24); epdBytes(buf, FB_LEN);   // new picture
+    epdCursor(); epdCmd(0x26); epdBytes(buf, FB_LEN);   // and as the "previous" one
+    epdCmd(0x22); epdData(0xC7);          // full refresh
+    epdCmd(0x20);
+    epdWait();
+    rtcPartials = 0;
+  }
+  memcpy(rtcShown, buf, FB_LEN);
+  rtcShownValid = true;
 
   epdCmd(0x10); epdData(0x01);           // panel deep sleep
   delay(5);
@@ -280,6 +339,7 @@ static int batteryPercent() {
   uint32_t mv = 0;
   for (int i = 0; i < 8; i++) mv += analogReadMilliVolts(PIN_VBAT);
   mv = mv / 8 * 2;   // 1:2 divider
+  if (mv < 2800) return -1;   // no battery fitted (running on USB)
   // Rough Li-ion curve: 3.30 V empty, 4.15 V full.
   static const uint16_t curve[][2] = {{3300, 0}, {3600, 10}, {3700, 30}, {3800, 55},
                                       {3900, 70}, {4000, 82}, {4150, 100}};
@@ -313,10 +373,12 @@ static void waitForButtonsUp() {
   for (;;) {}
 }
 
-[[noreturn]] static void switchOff() {
-  const char *lines[] = {"HOLD PWR", "TO SWITCH ON"};   // OFF
-  notice("OFF", lines, 2);
-  epdShow(fb);
+[[noreturn]] static void switchOff(bool batteryEmpty = false) {
+  const char *off[] = {"HOLD PWR", "TO SWITCH ON"};
+  const char *empty[] = {"PLEASE CHARGE", "", "THEN HOLD PWR", "TO SWITCH ON"};
+  if (batteryEmpty) notice("BATTERY", empty, 4);
+  else notice("OFF", off, 2);
+  epdShow(fb, true);
   waitForButtonsUp();
   digitalWrite(PIN_LATCH, LOW);   // on battery, the board loses power here
   delay(500);
@@ -409,7 +471,7 @@ static String esc(const String &s) {
   const char *lines[] = {"ON YOUR PHONE,", "JOIN THE WI-FI", AP_NAME, "",
                          "IF NO PAGE OPENS", "GO TO", "192.168.4.1", "PWR: CANCEL"};
   notice("SETUP", lines, 8);
-  epdShow(fb);
+  epdShow(fb, true);
 
   WiFi.mode(WIFI_AP_STA);
   int found = WiFi.scanNetworks();   // to offer nearby networks in the form
@@ -501,6 +563,7 @@ void setup() {
   if (!cfg.ready()) setupMode();
 
   int batt = batteryPercent();
+  if (batt >= 0 && batt <= BATT_EMPTY) switchOff(true);   // before Wi-Fi drains it further
   String why;
   if (!joinWifi()) why = "NO WI-FI";
   else why = fetchScreen(want, batt);

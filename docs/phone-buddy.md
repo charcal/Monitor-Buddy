@@ -55,6 +55,15 @@ choose which rail lines Travel watches, separately from the desk Buddy, set
 `EINK_RAIL` like `RAIL_LINES`, e.g. `EINK_RAIL=elizabeth=LIZZIE`. A line only
 appears when it has problems.
 
+**Page turns are quick and flash-free**: about half a second, with the
+picture changing in place. Every tenth turn, and after switching on, it does a
+full refresh with the usual black-and-white flash, which clears any faint
+ghosting.
+
+**Battery:** below 15% a black **BATTERY LOW** strip replaces the page dots.
+At 3% the Buddy shows **PLEASE CHARGE** and switches itself off, to protect
+the battery. (On USB power with no battery fitted, neither happens.)
+
 If the Buddy can't fetch a screen it keeps the last one and adds a black
 **OFFLINE** strip at the bottom, with the reason:
 
@@ -249,14 +258,16 @@ Everything here was built and tested on a computer: the bridge tests pass, the
 firmware compiles, and the screens were checked as pictures. These need a real
 board to confirm:
 
-- the first full refresh (orientation and the waveform copied from Waveshare),
+- ~~the first full refresh, Funnel's certificate from the board~~ (working),
+- the partial refresh (Waveshare's V2 waveform, with the old picture kept in
+  the chip's sleep memory),
 - switching off on battery via the latch, and waking from deep sleep on both buttons,
-- the battery percentage (the voltage curve is a rough Li-ion one),
-- Funnel's certificate from the board (it uses the Mozilla root list built into
-  the ESP32 core, so a normal Let's Encrypt certificate should be fine).
+- the battery percentage and the low and empty levels (the voltage curve is a
+  rough Li-ion one).
 
 ## Ideas for later
 
+(Done: fast partial refresh, low battery warning.)
+
 - Wake every 30 minutes as well as on button presses (the RTC chip can do it).
 - A "leave now" screen for the bus, using the time of the next one.
-- Fast partial refresh when stepping through screens, to cut the flash.
