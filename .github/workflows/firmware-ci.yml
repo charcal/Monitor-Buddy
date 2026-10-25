@@ -36,3 +36,5 @@ jobs:
         run: node --test "web-tests/*.test.mjs"
       - name: Build the firmware
         run: pio run -e esp32-c6
+      - name: Build Phone Buddy (e-ink)
+        run: pio run -e phone-buddy

@@ -1,0 +1,240 @@
+# Phone Buddy: the pocket e-ink version
+
+Phone Buddy is a small e-ink screen you carry with you. Press its button and it
+joins your phone's hotspot (or your home Wi-Fi), downloads one screen from the
+bridge, shows it and goes back to sleep. E-ink keeps the picture with no power,
+so it's readable all day and the battery lasts.
+
+It uses the same bridge as Monitor Buddy. The bridge draws each screen as a
+picture, so layouts can change without reflashing the Buddy.
+
+**Board:** Waveshare **ESP32-S3-ePaper-1.54 V2** (look for "V2" on the back or
+in the top-left corner of the board). V1 boards use different parts and won't
+work with this firmware.
+
+## The buttons
+
+| Button | Press | Hold |
+|---|---|---|
+| **PWR** (side) | next screen | 2 seconds: switch off |
+| **BOOT** | refresh this screen | 3 seconds: setup |
+
+When switched off, hold PWR to switch it back on. It starts on the first screen.
+
+## The screens
+
+In order: **Headlines** (two at a time, newest first), **Travel** (your next
+buses, plus any rail lines with problems), **Calendar** (next three events) and
+**Fantasy PL** (gameweek points, total, league rank, next deadline).
+
+Every screen shows the time it was fetched in the top-right corner, so you know
+how fresh it is. The dots at the bottom show where you are in the cycle.
+
+To change the order, or add a second page of headlines, set `EINK_VIEWS` in the
+bridge's `.env`, for example `EINK_VIEWS=news,news:2,travel,fpl`.
+
+If the Buddy can't fetch a screen it keeps the last one and adds a black
+**OFFLINE** strip at the bottom, with the reason:
+
+| Strip says | What it means |
+|---|---|
+| NO WI-FI | Neither network was found. Is the hotspot on? (See the iPhone note below.) |
+| NO BRIDGE | Connected, but the bridge didn't answer. Check the address, and that Funnel is running. |
+| WRONG KEY | The key on the Buddy doesn't match `PHONE_KEY` on the bridge. |
+| BRIDGE 500 (etc.) | The bridge had a problem. `sudo docker compose logs bridge` shows why. |
+
+---
+
+## Setting it up
+
+Do these in order. Each step says how to check it worked before moving on.
+
+### 1. Update the bridge
+
+On the CasaOS server (cal-mini.local):
+
+```sh
+cd ~/Monitor-Buddy/casaos
+git pull
+```
+
+Make a key for the Buddy. This prints a long random string; copy it somewhere
+safe, as you'll type it into the Buddy later:
+
+```sh
+openssl rand -hex 16
+```
+
+Open `.env` (`nano .env`) and add these two lines (paste your key after `PHONE_KEY=`):
+
+```
+PHONE_KEY=paste-the-key-here
+EINK_VIEWS=news,travel,cal,fpl
+```
+
+Save (Ctrl+O, Enter, Ctrl+X), then rebuild the bridge:
+
+```sh
+sudo docker compose up -d --build
+```
+
+**Check:** on your Mac, open this address (with your key at the end). You
+should see the Headlines screen as a small picture:
+
+```
+http://192.168.86.48:8787/eink/frame?fmt=png&key=paste-the-key-here
+```
+
+Add `&v=1`, `&v=2` or `&v=3` to see the other screens, for example
+`...frame?fmt=png&v=2&key=...`.
+
+### 2. Make the bridge reachable when you're out (Tailscale Funnel)
+
+At home the Buddy could talk to the bridge directly, but on your phone's
+hotspot it's on the internet. Tailscale Funnel gives your server a public HTTPS
+address without opening ports on your router. It's free and needs no domain.
+
+Only the Phone Buddy part of the bridge goes public (everything under `/pb`).
+The rest of the bridge, the flasher and the Spotify sign-in stay private, and
+every Funnel request without the right key is refused.
+
+1. **Make a Tailscale account** at tailscale.com (signing in with Google is fine).
+2. **Install Tailscale on the server.** If it's already installed as a CasaOS app,
+   skip this and run the commands below inside that app's terminal instead.
+
+   ```sh
+   curl -fsSL https://tailscale.com/install.sh | sh
+   sudo tailscale up
+   ```
+
+   `tailscale up` prints a link. Open it and sign in to add the server.
+3. **Turn on Funnel for the Buddy's address:**
+
+   ```sh
+   sudo tailscale funnel --bg --set-path /pb http://127.0.0.1:8787/eink
+   ```
+
+   The first time, it prints a link asking you to allow HTTPS and Funnel for
+   your account. Open it, approve, and run the command again.
+4. **Find your address:**
+
+   ```sh
+   tailscale funnel status
+   ```
+
+   It shows something like `https://cal-mini.tail1234.ts.net/pb`. That's your
+   **bridge address**. Write it down.
+
+**Check:** on your phone, turn Wi-Fi **off** (so it's on 4G/5G) and open your
+address with `/frame?fmt=png&key=...` on the end:
+
+```
+https://cal-mini.tail1234.ts.net/pb/frame?fmt=png&key=paste-the-key-here
+```
+
+You should see the same picture as in step 1. Without `&key=...` you should get
+"bad key". The first visit can take a few seconds while the certificate is made.
+
+Funnel keeps running after a restart. To turn it off:
+`sudo tailscale funnel --bg --set-path /pb http://127.0.0.1:8787/eink off`.
+
+### 3. Get the firmware onto the board
+
+1. On GitHub, open **Releases** in the fork and download
+   `phone-buddy-<version>.bin` from the newest release. (It's built
+   automatically when a release is published, next to the Monitor Buddy file.)
+2. Plug the board into your Mac with a USB-C data cable.
+3. In Chrome, open **https://espressif.github.io/esptool-js/**.
+4. Click **Connect** and pick the port (usually "USB JTAG/serial debug unit").
+   If nothing shows up: unplug, hold **BOOT**, plug back in, let go, and try again.
+5. The first time only, click **Erase Flash** and wait for it to finish.
+6. Set **Flash Address** to `0x0`, choose the `.bin` you downloaded, click **Program**.
+7. When it finishes, press the reset button on the board (or unplug and replug).
+
+**Check:** the screen shows **SETUP**. (With no settings yet, it goes straight there.)
+
+### 4. Set it up from your phone
+
+1. On your phone, open Wi-Fi settings and join **Phone-Buddy**. The setup page
+   should open by itself. If it doesn't, open a browser and go to `192.168.4.1`.
+2. Fill in:
+   - **Wi-Fi 1 (home):** your home network name and password.
+   - **Wi-Fi 2 (phone hotspot):** your phone's hotspot name (on an iPhone,
+     Settings > General > About > Name) and its password.
+   - **Bridge address:** the Funnel address from step 2, ending in `/pb`.
+   - **Key:** your `PHONE_KEY`.
+3. Tap **Save**. The Buddy restarts, joins Wi-Fi and shows the first screen.
+
+To change anything later, hold **BOOT** for 3 seconds. Passwords and the key are
+kept if you leave those boxes empty.
+
+### iPhone hotspot: two settings that matter
+
+- **Settings > Personal Hotspot > Maximise Compatibility: on.** The Buddy only
+  speaks 2.4 GHz Wi-Fi; without this it can't see the hotspot.
+- **Allow Others to Join: on.** iPhones hide their hotspot when nothing is
+  connected. With this on it stays visible. If the Buddy says NO WI-FI, opening
+  the Personal Hotspot page for a moment usually wakes it.
+
+The Buddy tries whichever network worked last time first, so on a day out it
+goes straight to the hotspot.
+
+---
+
+## How it fits together
+
+```
+ Phone Buddy (ESP32-S3, e-ink)
+   │  wakes on a button, joins home Wi-Fi or the phone hotspot
+   │  GET https://<server>.ts.net/pb/frame?v=2&batt=81   (X-Phone-Key: ...)
+   ▼
+ Tailscale Funnel ── /pb ──▶ bridge :8787 /eink/frame
+                              draws a 200 x 200 one-bit screen (bridge/eink.py)
+                              from the same data as Monitor Buddy's pages
+```
+
+- **Bridge:** `bridge/eink.py` draws the screens (Pillow, DejaVu Sans Bold).
+  `GET /eink/frame?v=N&batt=P` returns 5000 raw bytes, the panel's own layout;
+  add `fmt=png` to see a picture instead. Response headers `X-View`, `X-Views`
+  and `X-View-Name` say which screen it was. The view number wraps round, so the
+  Buddy just asks for "one more than last time".
+- **Key:** `PHONE_KEY` is checked on every `/eink/` request when it's set. If it
+  isn't set, requests that come through Funnel are refused (Funnel marks them
+  with a `Tailscale-Funnel-Request` header), so a missing key never leaves the
+  screens open to the internet.
+- **Firmware:** `src/phone_buddy/main.cpp`, built with `pio run -e phone-buddy`.
+  Settings and the last good screen are kept in flash, so they survive being
+  switched off. The few screens the Buddy draws itself (setup, offline, off)
+  use a bitmap font made by `tools/eink_font.py`.
+
+### V2 board pins (from Waveshare's V2 example code)
+
+| What | GPIO | Notes |
+|---|---|---|
+| E-paper BUSY / RST / DC / CS / SCK / MOSI | 8 / 9 / 10 / 11 / 12 / 13 | SSD1681-type controller, busy = high |
+| E-paper power | 6 | **active low** (low = on) |
+| Battery power latch | 17 | high keeps the board on when on battery; held during sleep |
+| PWR button | 18 | low when pressed; deep-sleep wake |
+| BOOT button | 0 | low when pressed; deep-sleep wake |
+| Battery voltage | 4 | ADC1 channel 3, through a 1:2 divider |
+| Audio codec power | 42 | active low; kept off |
+| I2C (RTC, SHTC3) | SDA 47, SCL 48 | not used yet |
+| RTC interrupt | 5 | not used yet |
+
+## Not yet checked on the board
+
+Everything here was built and tested on a computer: the bridge tests pass, the
+firmware compiles, and the screens were checked as pictures. These need a real
+board to confirm:
+
+- the first full refresh (orientation and the waveform copied from Waveshare),
+- switching off on battery via the latch, and waking from deep sleep on both buttons,
+- the battery percentage (the voltage curve is a rough Li-ion one),
+- Funnel's certificate from the board (it uses the Mozilla root list built into
+  the ESP32 core, so a normal Let's Encrypt certificate should be fine).
+
+## Ideas for later
+
+- Wake every 30 minutes as well as on button presses (the RTC chip can do it).
+- A "leave now" screen for the bus, using the time of the next one.
+- Fast partial refresh when stepping through screens, to cut the flash.

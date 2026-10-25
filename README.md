@@ -285,6 +285,12 @@ The built-in values are the release defaults, or your `config/config.h` settings
 
 ---
 
+## Phone Buddy (pocket e-ink)
+
+A carry-around version on a Waveshare ESP32-S3-ePaper-1.54 V2: press a button and
+it fetches headlines, buses, calendar or Fantasy PL from the same bridge, over
+your phone's hotspot. See [docs/phone-buddy.md](docs/phone-buddy.md).
+
 ## Acknowledgements
 
 Monitor-Buddy builds on the work of others:

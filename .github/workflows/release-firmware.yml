@@ -78,6 +78,17 @@ jobs:
           grep -aqF "Monitor-Buddy $V starting" $B/firmware.factory.bin || { echo "::error::FW_VERSION $V not in the image"; exit 1; }
           mkdir -p dist
           cp $B/firmware.factory.bin "dist/monitor-buddy-$V.bin"
+      - name: Build Phone Buddy (e-ink) and name it
+        env:
+          PLATFORMIO_BUILD_FLAGS: -DFW_VERSION=\"${{ steps.ver.outputs.version }}\"
+          V: ${{ steps.ver.outputs.version }}
+        run: |
+          pio run -e phone-buddy
+          B=.pio/build/phone-buddy
+          BOOT=(~/.platformio/packages/framework-arduinoespressif32*/tools/partitions/boot_app0.bin)
+          python tools/release_image.py $B/firmware.factory.bin $B/bootloader.bin $B/partitions.bin "${BOOT[0]}" $B/firmware.bin
+          grep -aqF "Phone-Buddy $V starting" $B/firmware.factory.bin || { echo "::error::FW_VERSION $V not in the Phone Buddy image"; exit 1; }
+          cp $B/firmware.factory.bin "dist/phone-buddy-$V.bin"
       - name: Source ZIP, and check it builds
         env:
           V: ${{ steps.ver.outputs.version }}
@@ -92,6 +103,7 @@ jobs:
           name: release-files
           path: |
             dist/monitor-buddy-*.bin
+            dist/phone-buddy-*.bin
             dist/Monitor-Buddy-*.zip
           if-no-files-found: error
 
@@ -124,7 +136,7 @@ jobs:
             fi
           fi
       - name: Attach to the release
-        run: gh release upload "$TAG" dist/monitor-buddy-*.bin dist/Monitor-Buddy-*.zip --clobber --repo ${{ github.repository }}
+        run: gh release upload "$TAG" dist/monitor-buddy-*.bin dist/phone-buddy-*.bin dist/Monitor-Buddy-*.zip --clobber --repo ${{ github.repository }}
       - name: Rebuild the Pages mirror
         # A fork that hosts the flasher elsewhere (casaos/) disables Pages: not an error.
         run: gh workflow run pages.yml --ref main --repo ${{ github.repository }} || echo "::notice::Pages workflow not available; skipped"

@@ -18,6 +18,8 @@ upper-case ASCII that its 5x7 font can draw, already cut to fit.
     GET /api/bins          the next bin collection day
     GET /api/summary       all of them at once, for the web flasher's Check button
     GET /spotify/login     one-time Spotify sign-in (stores a refresh token in /data)
+    GET /eink/frame        Phone Buddy: one 200x200 e-ink screen as 5000 raw bytes
+                           (?v=view number, ?batt=battery %, ?fmt=png to look at it)
 
 Everything is configured with environment variables; see .env.example.
 """
@@ -40,6 +42,8 @@ import requests
 from flask import Flask, jsonify, redirect, request
 from unidecode import unidecode
 
+import eink
+
 # ── Configuration ─────────────────────────────────────────
 
 def env(name: str, default: str = "") -> str:
@@ -52,6 +56,9 @@ def env_list(name: str) -> list[str]:
 
 TZ = ZoneInfo(env("TZ", "Europe/London") or "UTC")
 BUDDY_KEY = env("BUDDY_KEY")
+# Phone Buddy's key for /eink/. Reaching the bridge through Tailscale Funnel
+# (from the internet) always needs it; on the LAN it is checked when set.
+PHONE_KEY = env("PHONE_KEY")
 DATA_DIR = Path(env("DATA_DIR", "/data"))
 PUBLIC_URL = env("PUBLIC_URL").rstrip("/")   # e.g. https://cal-mini.local:8443/bridge
 HTTP_TIMEOUT = float(env("HTTP_TIMEOUT", "6") or 6)
@@ -857,9 +864,19 @@ def authorised() -> bool:
     return secrets.compare_digest(given, BUDDY_KEY)
 
 
+def phone_authorised() -> bool:
+    given = request.headers.get("X-Phone-Key") or request.args.get("key", "")
+    if PHONE_KEY:
+        return secrets.compare_digest(given, PHONE_KEY)
+    # No key set: LAN only. Funnel marks every request it forwards.
+    return not request.headers.get("Tailscale-Funnel-Request")
+
+
 @app.before_request
 def guard():
     if request.path.startswith("/api/") and not authorised():
+        return jsonify({"ok": False, "error": "bad key"}), 401
+    if request.path.startswith("/eink/") and not phone_authorised():
         return jsonify({"ok": False, "error": "bad key"}), 401
     return None
 
@@ -954,6 +971,43 @@ def api_summary():
                     "news": cache.get("news", 120, lambda: _safe(fetch_news)),
                     "rail": cache.get("rail", 60, lambda: _safe(fetch_rail)),
                     "bins": cache.get("bins", 300, lambda: _safe(fetch_bins))})
+
+
+# ── Phone Buddy (e-ink) ───────────────────────────────────
+# EINK_VIEWS: the screens the side button steps through, in order:
+# news, news:2 (the next two headlines), travel (buses and rail), cal, fpl.
+
+EINK_SOURCES = {
+    "news": lambda: {"news": cache.get("news", 120, lambda: _safe(fetch_news))},
+    "travel": lambda: {"bus": cache.get("bus", 15, lambda: _safe(fetch_bus)),
+                       "rail": cache.get("rail", 60, lambda: _safe(fetch_rail))},
+    "cal": lambda: {"cal": cache.get("cal:False", 60, lambda: _safe(lambda: fetch_cal(False)))},
+    "fpl": lambda: {"fpl": cache.get("fpl", 60, lambda: _safe(fetch_fpl))},
+}
+
+
+def _int_arg(name: str, default: int) -> int:
+    try:
+        return int(request.args.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+@app.get("/eink/frame")
+def eink_frame():
+    views = eink.parse_views(env("EINK_VIEWS"))
+    page = _int_arg("v", 0) % len(views)
+    batt = max(-1, min(100, _int_arg("batt", -1)))
+    view = views[page]
+    data = EINK_SOURCES[view.split(":")[0]]()
+    img = eink.render(view, data, datetime.now(TZ), batt, page, len(views))
+    headers = {"X-View": str(page), "X-Views": str(len(views)), "X-View-Name": view}
+    if request.args.get("fmt") == "png":
+        import io
+        buf = io.BytesIO()
+        img.save(buf, "PNG")
+        return buf.getvalue(), 200, {**headers, "Content-Type": "image/png"}
+    return eink.panel_bytes(img), 200, {**headers, "Content-Type": "application/octet-stream"}
 
 
 _spotify_states: dict[str, float] = {}

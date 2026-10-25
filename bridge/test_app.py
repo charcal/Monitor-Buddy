@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 @pytest.fixture()
 def bridge(monkeypatch, tmp_path):
     for k in list(os.environ):
-        if k.startswith(("HA_", "PLEX_", "JELLYFIN_", "SPOTIFY_", "CAL_", "NOWPLAYING_", "BUDDY_")):
+        if k.startswith(("HA_", "PLEX_", "JELLYFIN_", "SPOTIFY_", "CAL_", "NOWPLAYING_", "BUDDY_", "PHONE_", "EINK_")):
             monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("TZ", "Europe/London")
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
@@ -459,3 +459,54 @@ def test_bins_bank_holidays_from_gov_uk(bridge, monkeypatch):
     assert bridge.bank_holidays() == {date(2026, 12, 28)}
     monkeypatch.setenv("BIN_BANK_HOLIDAYS", "off")
     assert bridge.bank_holidays() == set()
+
+
+# ── Phone Buddy (e-ink) ───────────────────────────────────
+
+def test_eink_panel_bytes_layout():
+    import eink
+    from PIL import Image
+    img = Image.new("1", (200, 200), 1)
+    img.putpixel((0, 0), 0)      # top-left black -> first byte 0x7F
+    img.putpixel((199, 199), 0)  # bottom-right black -> last byte 0xFE
+    data = eink.panel_bytes(img)
+    assert len(data) == 5000 and data[0] == 0x7F and data[-1] == 0xFE and data[1] == 0xFF
+
+
+def test_eink_views_parse():
+    import eink
+    assert eink.parse_views("") == ["news", "travel", "cal", "fpl"]
+    assert eink.parse_views("news, news:2,bogus,FPL") == ["news", "news:2", "fpl"]
+
+
+def test_eink_renders_every_view_and_failure():
+    import eink
+    from zoneinfo import ZoneInfo
+    now = datetime(2026, 10, 25, 14, 22, tzinfo=ZoneInfo("Europe/London"))
+    good = {"news": {"ok": True, "items": [{"title": "A MADE UP HEADLINE " * 6, "source": "TEST", "age_min": 5}]},
+            "bus": {"ok": True, "rows": [{"line": "99", "dest": "NOWHERE", "mins": [0, 7]}]},
+            "rail": {"ok": True, "all_good": True, "lines": []},
+            "cal": {"ok": True, "events": [{"label": "TODAY 10:00", "title": "MADE UP MEETING"}]},
+            "fpl": {"ok": True, "team": "TEST XI", "total": 100, "rank": 2, "league": "OVERALL",
+                    "gw": 3, "gw_points": 40, "live": False, "next_gw": 4,
+                    "deadline": int(now.timestamp()) + 7200}}
+    bad = {k: {"ok": False, "setup": False} for k in good}
+    for data in (good, bad, {}):
+        for v in ("news", "news:2", "travel", "cal", "fpl", "nope"):
+            img = eink.render(v, data, now, 50, 0, 4)
+            assert img.size == (200, 200) and len(eink.panel_bytes(img)) == 5000
+    assert eink.deadline_text(int(now.timestamp()) + 5400, now) == "IN 1H 30M"
+
+
+def test_eink_frame_route_and_keys(bridge, monkeypatch):
+    monkeypatch.setattr(bridge, "fetch_news", lambda: {"ok": True, "items": []})
+    c = bridge.app.test_client()
+    r = c.get("/eink/frame?v=4&batt=80")          # 4 views -> wraps to view 0
+    assert r.status_code == 200 and len(r.data) == 5000
+    assert r.headers["X-View"] == "0" and r.headers["X-Views"] == "4" and r.headers["X-View-Name"] == "news"
+    assert c.get("/eink/frame?fmt=png").data[:4] == b"\x89PNG"
+    # Through Tailscale Funnel with no key set: refused.
+    assert c.get("/eink/frame", headers={"Tailscale-Funnel-Request": "?1"}).status_code == 401
+    monkeypatch.setattr(bridge, "PHONE_KEY", "s3cret")
+    assert c.get("/eink/frame").status_code == 401
+    assert c.get("/eink/frame", headers={"X-Phone-Key": "s3cret", "Tailscale-Funnel-Request": "?1"}).status_code == 200
