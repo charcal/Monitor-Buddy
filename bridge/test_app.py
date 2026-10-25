@@ -475,7 +475,7 @@ def test_eink_panel_bytes_layout():
 
 def test_eink_views_parse():
     import eink
-    assert eink.parse_views("") == ["news", "news:2", "travel", "cal", "fpl"]
+    assert eink.parse_views("") == ["news", "news:2", "weather", "travel", "cal", "fpl"]
     assert eink.parse_views("news, news:2,bogus,FPL") == ["news", "news:2", "fpl"]
 
 
@@ -651,3 +651,44 @@ def test_eink_settings_page_api(bridge, monkeypatch):
     r = c.get("/api/eink-preview?v=0")
     assert r.data[:4] == b"\x89PNG" and r.headers["X-Views"]
     assert c.post("/api/eink-settings", json={"reset": True}).get_json()["views"] == ["news", "fpl"]
+
+
+def test_weather_rain_outlook_and_fetch(bridge, monkeypatch):
+    from zoneinfo import ZoneInfo
+    now = datetime(2026, 10, 25, 14, 20, tzinfo=ZoneInfo("Europe/London"))
+    times = [f"2026-10-25T{h:02d}:00" for h in range(12, 24)] + [f"2026-10-26T{h:02d}:00" for h in range(0, 6)]
+    dry = [0] * len(times)
+    ro = bridge.rain_outlook
+    assert ro(times, dry, dry, now) == "DRY FOR 12H"
+    later = [80 if t.endswith("T16:00") else 0 for t in times]
+    assert ro(times, later, dry, now) == "RAIN FROM 16:00"
+    wet_now = [90 if t[11:13] in ("14", "15") else 0 for t in times]
+    assert ro(times, wet_now, dry, now) == "RAIN TO 16:00"
+    assert ro(times, [90] * len(times), dry, now) == "RAIN FOR 12H"
+    assert ro(times, dry, [0.5 if t.endswith("T18:00") else 0 for t in times], now) == "RAIN FROM 18:00"   # mm counts too
+    assert ro([], [], [], now) == ""
+
+    assert bridge.fetch_weather()["setup"] is False
+    monkeypatch.setenv("EINK_WEATHER", "51.5000,0.0500=MADE UP PLACE")
+    asked = {}
+
+    def fake_get(url, params=None, **k):
+        asked.update(params or {})
+        return Resp({"current": {"temperature_2m": 12.4, "weather_code": 61, "wind_speed_10m": 9.6, "is_day": 1},
+                     "hourly": {"time": times, "precipitation_probability": wet_now, "precipitation": dry},
+                     "daily": {"temperature_2m_max": [14.2, 13], "temperature_2m_min": [6.8, 5]}})
+    monkeypatch.setattr(bridge.session, "get", fake_get)
+    w = bridge.fetch_weather()
+    assert asked["latitude"] == "51.5000" and asked["wind_speed_unit"] == "mph"
+    assert (w["place"], w["temp"], w["words"], w["high"], w["low"], w["wind"]) == ("MADE UP PLACE", 12, "RAIN", 14, 7, 10)
+    import eink
+    for code in (0, 2, 3, 45, 61, 71, 95):
+        img = eink.render("weather", {"weather": dict(w, code=code)}, now)
+        assert len(eink.panel_bytes(img)) == 5000
+    # Saved from the settings page; bad coordinates refused.
+    c = bridge.app.test_client()
+    body = {"views": ["weather"], "theme": "light", "rail": [], "commute": "off",
+            "weather": {"lat": "51.47", "lon": "0.078", "label": "Somewhere"}}
+    got = c.post("/api/eink-settings", json=body).get_json()
+    assert got["weather"] == {"lat": "51.4700", "lon": "0.0780", "label": "SOMEWHERE"}
+    assert c.post("/api/eink-settings", json=dict(body, weather={"lat": "x"})).status_code == 400

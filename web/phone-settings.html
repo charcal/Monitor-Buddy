@@ -22,6 +22,8 @@
     .pb .item label { flex: 1; display: flex; align-items: center; gap: 0.6rem; cursor: pointer; }
     .pb .item.off label { color: var(--muted); }
     .pb .item button { min-width: 2.2rem; }
+    .pb input[type="search"] { font: inherit; padding: 0.35rem 0.5rem; border-radius: 8px; min-width: 14rem;
+      background: var(--input); color: var(--fg); border: 1px solid var(--border-strong); }
     .pb input[type="text"], .pb input[type="time"] { font: inherit; padding: 0.35rem 0.5rem; border-radius: 8px;
       background: var(--input); color: var(--fg); border: 1px solid var(--border-strong); }
     .pb input[type="text"] { width: 8rem; text-transform: uppercase; }
@@ -71,6 +73,22 @@
         <div class="seg" role="radiogroup" aria-label="Theme">
           <label><input type="radio" name="theme" value="light"> Black on white</label>
           <label><input type="radio" name="theme" value="dark"> White on black, like Monitor Buddy</label>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Weather</h2>
+        <p class="muted">Where the Weather screen is for. Search for a town or area, then pick it.</p>
+        <div class="bar">
+          <input type="search" id="w-search" placeholder="e.g. Shooters Hill" aria-label="Search for a place">
+          <button class="btn btn--secondary" type="button" id="w-find">Search</button>
+        </div>
+        <div id="w-results" class="rows"></div>
+        <p id="w-current" class="muted"></p>
+        <div class="bar" id="w-labelrow">
+          <label for="w-label">Name on the screen</label>
+          <input type="text" id="w-label" maxlength="15">
+          <button class="btn btn--link" type="button" id="w-clear">Remove</button>
         </div>
       </section>
 

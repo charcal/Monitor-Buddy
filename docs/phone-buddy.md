@@ -27,6 +27,12 @@ In order: **Headlines** (one a screen, big when it is short; the newest two by d
 buses, plus any rail lines with problems), **Calendar** (next three events) and
 **Fantasy PL** (gameweek points, total, league rank, next deadline).
 
+**Weather** shows the temperature, an icon, and the coat question in plain
+words: `RAIN FROM 16:00`, `RAIN TO 21:00` or `DRY FOR 12H`, from the next 12
+hours of the forecast, plus wind and today's high and low. It uses Open-Meteo
+(free, no account). Pick the place on the settings page; until then the
+screen is skipped.
+
 **Screens with nothing to show are skipped**: no buses due and no rail
 problems, nothing on the calendar, no gameweek. A source that's set up but
 failing still shows, so you can see it's broken.

@@ -1,11 +1,45 @@
 // The Phone Buddy settings page: reads and saves the bridge's e-ink settings
 // through the flasher's /bridge/ pass-through (casaos/Caddyfile).
-import { VIEW_NAMES, viewRows, move, railRows, body } from "./phonesettings-model.js";
+import { VIEW_NAMES, viewRows, move, railRows, body, placeLabel } from "./phonesettings-model.js";
+import { searchCity } from "./geocode.js";
 
 const API = "bridge/api/";
 const $ = (id) => document.getElementById(id);
 let views = [];
 let rail = [];
+let weather = null;   // { lat, lon, label } or null
+
+function drawWeather() {
+  $("w-current").textContent = weather
+    ? `Set to ${weather.label || "this place"} (${weather.lat}, ${weather.lon}).`
+    : "Not set yet: the Weather screen is skipped until you pick a place.";
+  $("w-labelrow").hidden = !weather;
+  if (weather) $("w-label").value = weather.label;
+}
+
+async function findPlace() {
+  const box = $("w-results");
+  box.replaceChildren();
+  const q = $("w-search").value.trim();
+  if (!q) return;
+  try {
+    const found = await searchCity(fetch, q);
+    if (!found.length) { box.textContent = "No places found. Try a nearby town."; return; }
+    for (const p of found.slice(0, 6)) {
+      const b = Object.assign(document.createElement("button"), {
+        type: "button", className: "btn btn--secondary", textContent: p.label });
+      b.addEventListener("click", () => {
+        weather = { lat: p.lat, lon: p.lon, label: placeLabel(p.name) };
+        box.replaceChildren();
+        drawWeather();
+        status("Place picked: click Save to use it.");
+      });
+      box.append(b);
+    }
+  } catch (e) {
+    box.textContent = `Search failed: ${e.message}`;
+  }
+}
 
 function status(text, tone = "") { $("status").textContent = text; $("status").className = tone; }
 
@@ -70,6 +104,8 @@ function show(s) {
   drawRail();
   document.querySelector(`input[name=theme][value=${s.theme}]`).checked = true;
   drawCommute(s.commute);
+  weather = s.weather;
+  drawWeather();
   $("source").textContent = s.saved
     ? "These settings are saved on the bridge and take priority over its .env file."
     : "Showing the .env file's settings. Saving here keeps them on the bridge instead.";
@@ -117,11 +153,15 @@ async function load() {
 }
 
 $("commute-on").addEventListener("change", syncCommute);
+$("w-find").addEventListener("click", findPlace);
+$("w-search").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); findPlace(); } });
+$("w-label").addEventListener("input", () => { if (weather) weather.label = $("w-label").value; });
+$("w-clear").addEventListener("click", () => { weather = null; drawWeather(); status("Place removed: click Save to confirm."); });
 
 $("form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const payload = body({
-    views, rail,
+    views, rail, weather,
     theme: document.querySelector("input[name=theme]:checked")?.value || "light",
     commute: { on: $("commute-on").checked,
       rows: [[$("m-from").value, $("m-to").value], [$("e-from").value, $("e-to").value]] },

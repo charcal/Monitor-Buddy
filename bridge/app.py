@@ -869,6 +869,89 @@ def fetch_bins(today: date | None = None, holidays: set[date] | None = None) -> 
     return {"ok": True, "setup": True, "days": days}
 
 
+# ── Weather (Open-Meteo, no key) ──────────────────────────
+# EINK_WEATHER: "lat,lon=LABEL", e.g. 51.4720,0.0780=SHOOTERS HILL (set it on the
+# flasher's Phone Buddy settings page, which searches places by name).
+
+WEATHER_API = "https://api.open-meteo.com/v1/forecast"
+_LATLON = re.compile(r"^\s*(-?\d{1,2}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)\s*$")
+
+
+def weather_words(code: int) -> str:
+    """Monitor Buddy's weatherCodeText, with drizzle and showers told apart."""
+    if code == 0:
+        return "CLEAR"
+    if code in (1, 2):
+        return "PARTLY CLOUDY"
+    if code == 3:
+        return "CLOUDY"
+    if code in (45, 48):
+        return "FOG"
+    if 51 <= code <= 57:
+        return "DRIZZLE"
+    if 61 <= code <= 67:
+        return "RAIN"
+    if 80 <= code <= 82:
+        return "SHOWERS"
+    if 71 <= code <= 77 or code in (85, 86):
+        return "SNOW"
+    if code >= 95:
+        return "STORM"
+    return "WEATHER"
+
+
+def _wet(prob, mm) -> bool:
+    return (prob or 0) >= 50 or (mm or 0) >= 0.2
+
+
+def rain_outlook(times: list[str], probs: list, mm: list, now: datetime) -> str:
+    """The coat question in a few words, from Open-Meteo's hourly forecast
+    (local times "2026-10-25T15:00"): RAIN NOW, RAIN TO 16:00, RAIN FROM 15:00,
+    DRY UNTIL 22:00 or DRY FOR 12H. Looks 12 hours ahead from this hour."""
+    hour = now.replace(minute=0, second=0, microsecond=0, tzinfo=None)
+    rows = []
+    for t, p, r in zip(times, probs, mm):
+        try:
+            at = datetime.fromisoformat(t)
+        except ValueError:
+            continue
+        if hour <= at < hour + timedelta(hours=12):
+            rows.append((at, _wet(p, r)))
+    if not rows:
+        return ""
+    if rows[0][1]:
+        dry = next((at for at, wet in rows if not wet), None)
+        return f"RAIN TO {dry:%H:%M}" if dry else "RAIN FOR 12H"
+    wet = next((at for at, w in rows if w), None)
+    return f"RAIN FROM {wet:%H:%M}" if wet else "DRY FOR 12H"
+
+
+def fetch_weather() -> dict:
+    spec = eink_setting("EINK_WEATHER")   # the settings page's, else the .env's
+    where, _, label = spec.partition("=")
+    m = _LATLON.match(where)
+    if not m:
+        return {"ok": False, "setup": False, "error": "not configured"}
+    params = {"latitude": m.group(1), "longitude": m.group(2), "timezone": str(TZ),
+              "current": "temperature_2m,weather_code,wind_speed_10m,is_day",
+              "hourly": "precipitation_probability,precipitation",
+              "daily": "temperature_2m_max,temperature_2m_min",
+              "wind_speed_unit": "mph", "forecast_days": 2}
+    r = session.get(WEATHER_API, params=params, timeout=HTTP_TIMEOUT)
+    r.raise_for_status()
+    d = r.json()
+    cur, hourly, daily = d.get("current") or {}, d.get("hourly") or {}, d.get("daily") or {}
+    code = int(cur.get("weather_code") or 0)
+    now = datetime.now(TZ)
+    return {"ok": True, "setup": True, "place": clean(label or "WEATHER", 15),
+            "temp": round(cur.get("temperature_2m") or 0), "code": code, "words": weather_words(code),
+            "day": bool(cur.get("is_day", 1)), "wind": round(cur.get("wind_speed_10m") or 0),
+            "high": round((daily.get("temperature_2m_max") or [0])[0]),
+            "low": round((daily.get("temperature_2m_min") or [0])[0]),
+            "outlook": rain_outlook(hourly.get("time") or [], hourly.get("precipitation_probability") or [],
+                                    hourly.get("precipitation") or [], now)}
+
+
 # ── HTTP ──────────────────────────────────────────────────
 
 def authorised() -> bool:
@@ -999,7 +1082,7 @@ def api_summary():
 # Settings saved from the flasher's Phone Buddy settings page
 # (phone-settings.html) take priority over the .env: /data/eink-settings.json.
 EINK_SETTINGS_FILE = DATA_DIR / "eink-settings.json"
-EINK_KEYS = ("EINK_VIEWS", "EINK_THEME", "EINK_RAIL", "EINK_COMMUTE")
+EINK_KEYS = ("EINK_VIEWS", "EINK_THEME", "EINK_RAIL", "EINK_COMMUTE", "EINK_WEATHER")
 _RAIL_ID = re.compile(r"^[a-z][a-z0-9-]{1,30}$")
 _HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
@@ -1036,6 +1119,8 @@ EINK_SOURCES = {
     "travel": lambda: {"bus": cache.get("bus", 15, lambda: _safe(fetch_bus)), "rail": eink_rail()},
     "cal": lambda: {"cal": cache.get("cal:False", 60, lambda: _safe(lambda: fetch_cal(False)))},
     "fpl": lambda: {"fpl": cache.get("fpl", 60, lambda: _safe(fetch_fpl))},
+    "weather": lambda: {"weather": cache.get(f"weather:{eink_setting('EINK_WEATHER')}", 600,
+                                             lambda: _safe(fetch_weather))},
 }
 
 
@@ -1099,7 +1184,14 @@ def eink_settings_json() -> dict:
         [f"{a // 60:02d}:{a % 60:02d}", f"{b // 60:02d}:{b % 60:02d}"] for a, b in eink.parse_windows(commute)]
     return {"ok": True, "views": views, "theme": "dark" if eink_setting("EINK_THEME").lower() == "dark" else "light",
             "rail": rail, "commute": windows, "saved": bool(eink_saved()),
-            "available_views": ["news", "news:2", "news:3", "travel", "cal", "fpl"]}
+            "weather": eink_weather_json(),
+            "available_views": ["news", "news:2", "news:3", "weather", "travel", "cal", "fpl"]}
+
+
+def eink_weather_json():
+    where, _, label = eink_setting("EINK_WEATHER").partition("=")
+    m = _LATLON.match(where)
+    return {"lat": m.group(1), "lon": m.group(2), "label": label.strip()} if m else None
 
 
 def eink_validate(body: dict) -> tuple[dict, list[str]]:
@@ -1129,6 +1221,18 @@ def eink_validate(body: dict) -> tuple[dict, list[str]]:
         label = clean(str(r.get("label") or ""), 12)
         parts.append(f"{lid}={label}" if label else lid)
     out["EINK_RAIL"] = ",".join(parts) or "none"
+    weather = body.get("weather")
+    if weather is None:
+        out["EINK_WEATHER"] = ""
+    else:
+        try:
+            lat, lon = float(weather.get("lat")), float(weather.get("lon"))
+            if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+                raise ValueError
+            label = clean(str(weather.get("label") or ""), 15)
+            out["EINK_WEATHER"] = f"{lat:.4f},{lon:.4f}" + (f"={label}" if label else "")
+        except (TypeError, ValueError, AttributeError):
+            errors.append("weather needs a latitude and longitude")
     commute = body.get("commute", [])
     if commute in ("off", []):
         out["EINK_COMMUTE"] = "off"

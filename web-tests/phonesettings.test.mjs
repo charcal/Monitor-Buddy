@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { viewRows, move, railRows, body } from "../web/js/phonesettings-model.js";
+import { viewRows, move, railRows, body, placeLabel } from "../web/js/phonesettings-model.js";
 
 const ALL = ["news", "news:2", "news:3", "travel", "cal", "fpl"];
 
@@ -27,7 +27,15 @@ test("the body the bridge expects", () => {
     commute: { on: true, rows: [["07:00", "09:00"], ["", ""]] },
   });
   assert.deepEqual(b, { views: ["travel", "news"], theme: "dark",
-    rail: [{ id: "elizabeth", label: "ELIZ" }], commute: [["07:00", "09:00"]] });
+    rail: [{ id: "elizabeth", label: "ELIZ" }], commute: [["07:00", "09:00"]], weather: null });
   const off = body({ views: viewRows(["news"], ALL), theme: "light", rail: [], commute: { on: false, rows: [] } });
   assert.equal(off.commute, "off");
+});
+
+test("weather place: label from the name, null when unset", () => {
+  assert.equal(placeLabel("Shooters Hill"), "SHOOTERS HILL");
+  assert.equal(placeLabel("A very long place name indeed"), "A VERY LONG PLA");
+  const b = body({ views: viewRows(["weather"], ["weather"]), theme: "light", rail: [], commute: { on: false, rows: [] },
+    weather: { lat: "51.4700", lon: "0.0780", label: "Somewhere" } });
+  assert.deepEqual(b.weather, { lat: "51.4700", lon: "0.0780", label: "SOMEWHERE" });
 });

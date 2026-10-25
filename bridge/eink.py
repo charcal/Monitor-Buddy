@@ -32,7 +32,7 @@ DOTS_Y = H - 9         # page dots
 BOTTOM = H - 20        # content stops above the dots
 INK, GREY = "ink", "grey"
 
-VIEWS = ("news", "travel", "cal", "fpl")
+VIEWS = ("news", "weather", "travel", "cal", "fpl")
 LOW_BATTERY = 15       # percent: the bottom strip asks to be charged
 
 
@@ -278,6 +278,78 @@ def view_travel(c: Canvas, bus, rail, now: datetime):
             y += h
 
 
+def weather_icon(c: Canvas, cx: int, cy: int, code: int, day: bool):
+    """Monitor Buddy's drawWeatherIcon at about two thirds the size: a sun (a
+    moon at night), or a cloud with rain, snow, fog or a lightning bolt."""
+    import math
+    d = c.d
+
+    def sun_or_moon(x, y, r):
+        if day:
+            d.ellipse((x - r, y - r, x + r, y + r), outline=0, width=3)
+            for i in range(8):
+                a = i * math.pi / 4
+                d.line((x + math.cos(a) * (r + 6), y + math.sin(a) * (r + 6),
+                        x + math.cos(a) * (r + 12), y + math.sin(a) * (r + 12)), fill=0, width=3)
+        else:   # a crescent
+            d.ellipse((x - r - 2, y - r - 2, x + r + 2, y + r + 2), fill=0)
+            d.ellipse((x - r // 2, y - r - 8, x + r + 8, y + r // 2), fill=1)
+
+    if code == 0:
+        sun_or_moon(cx, cy, 14)
+        return
+
+    def cloud(dx, dy, fill, grow=0):   # three puffs on a rounded base
+        g = grow
+        d.ellipse((cx + dx - 25 - g, cy + dy - 9 - g, cx + dx + 1 + g, cy + dy + 17 + g), fill=fill)
+        d.ellipse((cx + dx - 14 - g, cy + dy - 21 - g, cx + dx + 18 + g, cy + dy + 11 + g), fill=fill)
+        d.ellipse((cx + dx + 6 - g, cy + dy - 6 - g, cx + dx + 30 + g, cy + dy + 18 + g), fill=fill)
+        d.rounded_rectangle((cx + dx - 28 - g, cy + dy + 4 - g, cx + dx + 30 + g, cy + dy + 20 + g),
+                            radius=8 + g, fill=fill)
+
+    if code in (1, 2):   # partly cloudy: the sun peeking out behind a smaller cloud
+        sun_or_moon(cx - 10, cy - 12, 10)
+        cloud(4, 6, 1, grow=3)   # a gap of paper between the sun and the cloud
+        cloud(4, 6, 0)
+        return
+    cloud(0, 0, 0)
+    rain = 51 <= code <= 67 or 80 <= code <= 82
+    if rain:
+        for x in (-18, -6, 6, 18):
+            d.line((cx + x, cy + 26, cx + x - 5, cy + 37), fill=0, width=3)
+    elif 71 <= code <= 77 or code in (85, 86):
+        for x in (-16, 0, 16):
+            d.line((cx + x - 4, cy + 31, cx + x + 4, cy + 31), fill=0, width=2)
+            d.line((cx + x, cy + 27, cx + x, cy + 35), fill=0, width=2)
+    elif code in (45, 48):
+        for y in (27, 33):
+            d.line((cx - 24, cy + y, cx + 26, cy + y), fill=0, width=3)
+    elif code >= 95:
+        d.polygon([(cx + 2, cy + 22), (cx - 8, cy + 34), (cx, cy + 34), (cx - 6, cy + 44),
+                   (cx + 10, cy + 29), (cx + 2, cy + 29)], fill=0)
+
+
+def view_weather(c: Canvas, w, now: datetime):
+    """Monitor Buddy's Weather page, plus the coat question: will it rain, and when."""
+    label_row(c, (w.get("place") if isinstance(w, dict) and w.get("ok") else "") or "WEATHER", now)
+    if not_ready(c, w, "WEATHER", "A PLACE ON THE SETTINGS PAGE"):
+        return
+    temp = str(w.get("temp", 0))
+    ts = 6 if len(temp) <= 2 else 5
+    c.text(M, BODY + 2, temp, ts)
+    c.text(M + c.width(temp, ts), BODY + 2, "C", 2)
+    weather_icon(c, 156, BODY + 26, int(w.get("code", 0)), bool(w.get("day", True)))
+    y = BODY + 8 * ts + 6
+    c.text(M, y, fit_chars(w.get("words", ""), 2, W - 2 * M), 2, GREY)
+    y += 24
+    for ln in wrap(w.get("outlook", ""), 15, 1):
+        c.text(M, y, ln, 2)
+        y += 20
+    # High and low, and wind, as two grey label-value pairs like Fantasy PL's.
+    c.text(M, BOTTOM - 16, f"HIGH {w.get('high', 0)} LOW {w.get('low', 0)}", 2, GREY)
+    c.text(M, BOTTOM - 36, f"WIND {w.get('wind', 0)} MPH", 2, GREY)
+
+
 def clock_text(epoch: int, tz) -> str:
     return datetime.fromtimestamp(epoch, tz).strftime("%H:%M")
 
@@ -405,7 +477,7 @@ def parse_views(spec: str) -> list[str]:
         v = v.strip().lower()
         if v.split(":")[0] in VIEWS:
             out.append(v)
-    return out or ["news", "news:2", "travel", "cal", "fpl"]
+    return out or ["news", "news:2", "weather", "travel", "cal", "fpl"]
 
 
 # ── Which screens, and which first ────────────────────────
@@ -438,6 +510,9 @@ def has_content(view: str, data: dict, now: datetime) -> bool:
             return True
         t = int(now.timestamp())
         return any(not e.get("end") or e["end"] > t for e in d.get("events") or [])
+    if name == "weather":
+        d = data.get("weather")
+        return isinstance(d, dict) and d.get("setup") is not False
     if name == "fpl":
         d = data.get("fpl")
         if not isinstance(d, dict) or d.get("setup") is False:
@@ -507,6 +582,8 @@ def render(view: str, data: dict, now: datetime, batt: int = -1, page: int = 0, 
         view_news(c, data.get("news"), now, max(0, int(arg) - 1) if arg.isdigit() else 0)
     elif name == "travel":
         view_travel(c, data.get("bus"), data.get("rail"), now)
+    elif name == "weather":
+        view_weather(c, data.get("weather"), now)
     elif name == "cal":
         view_cal(c, data.get("cal"), now)
     elif name == "fpl":

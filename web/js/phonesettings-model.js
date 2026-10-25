@@ -2,7 +2,7 @@
 // the bridge's /api/eink-settings JSON in, the page's rows out, and back.
 
 export const VIEW_NAMES = {
-  news: "Headline 1", "news:2": "Headline 2", "news:3": "Headline 3",
+  news: "Headline 1", "news:2": "Headline 2", "news:3": "Headline 3", weather: "Weather",
   travel: "Travel (buses and rail)", cal: "Calendar", fpl: "Fantasy PL",
 };
 
@@ -41,12 +41,19 @@ export function railRows(saved) {
 }
 
 // The POST body. commute: { on, rows: [[from, to], ...] }; empty rows are skipped.
-export function body({ views, theme, rail, commute }) {
+// The label the Buddy shows for a place: its name, upper case, cut to 15.
+export function placeLabel(name) {
+  return String(name || "").toUpperCase().slice(0, 15).trim();
+}
+
+export function body({ views, theme, rail, commute, weather = null }) {
   const windows = commute.on ? commute.rows.filter(([a, b]) => a && b) : [];
   return {
     views: views.filter((v) => v.on).map((v) => v.id),
     theme,
     rail: rail.filter((r) => r.on).map((r) => ({ id: r.id, label: String(r.label || "").trim().toUpperCase() })),
     commute: windows.length ? windows : "off",
+    weather: weather && weather.lat && weather.lon
+      ? { lat: weather.lat, lon: weather.lon, label: placeLabel(weather.label) } : null,
   };
 }
