@@ -510,3 +510,20 @@ def test_eink_frame_route_and_keys(bridge, monkeypatch):
     monkeypatch.setattr(bridge, "PHONE_KEY", "s3cret")
     assert c.get("/eink/frame").status_code == 401
     assert c.get("/eink/frame", headers={"X-Phone-Key": "s3cret", "Tailscale-Funnel-Request": "?1"}).status_code == 200
+
+
+def test_news_recovers_from_dead_connection_and_keeps_last_good(bridge, monkeypatch):
+    rss = (b"<rss><channel><item><title>Made up headline</title>"
+           b"<pubDate>Sun, 25 Oct 2026 14:00:00 GMT</pubDate></item></channel></rss>")
+    import requests
+
+    def dead(*a, **k):
+        raise requests.ConnectionError("closed")
+    monkeypatch.setattr(bridge.session, "get", dead)
+    monkeypatch.setattr(bridge.requests, "get", lambda *a, **k: Resp(content=rss))
+    assert bridge.fetch_news()["items"][0]["title"] == "MADE UP HEADLINE"
+    # Now everything fails: the last good headlines are still shown.
+    bridge.cache._data.clear()
+    monkeypatch.setattr(bridge.requests, "get", dead)
+    out = bridge.fetch_news()
+    assert out["ok"] and out["items"][0]["title"] == "MADE UP HEADLINE"

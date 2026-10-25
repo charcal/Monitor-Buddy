@@ -699,6 +699,9 @@ def split_feed_entry(entry: str) -> tuple[str, str]:
     return url.strip(), label.strip()
 
 
+_last_feed: dict[str, bytes] = {}   # the last good copy of each feed
+
+
 def fetch_news() -> dict:
     feeds = env_list("NEWS_FEEDS") or [NEWS_DEFAULT]
     limit = max(1, min(8, int(env("NEWS_MAX", "8") or 8)))
@@ -707,12 +710,21 @@ def fetch_news() -> dict:
         url, label = split_feed_entry(entry)
         try:
             def load(url=url):
-                r = session.get(url, timeout=HTTP_TIMEOUT * 2)
+                try:
+                    r = session.get(url, timeout=HTTP_TIMEOUT * 2)
+                except requests.ConnectionError:
+                    # A pooled connection the server has closed can fail every
+                    # time; try once more on a fresh connection.
+                    r = requests.get(url, timeout=HTTP_TIMEOUT * 2, headers=session.headers)
                 r.raise_for_status()
+                _last_feed[url] = r.content
                 return r.content
             items.extend(parse_feed(cache.get(f"feed:{url}", 600, load), label))
         except Exception as e:   # one broken feed must not hide the others
-            errors.append(type(e).__name__)
+            if url in _last_feed:   # keep the last good headlines (their ages stay true)
+                items.extend(parse_feed(_last_feed[url], label))
+            else:
+                errors.append(type(e).__name__)
     if not items and errors:
         return {"ok": False, "setup": True, "error": f"news: {', '.join(errors)}", "items": []}
     now = time.time()
