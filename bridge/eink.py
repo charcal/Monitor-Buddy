@@ -230,6 +230,17 @@ def view_travel(c: Canvas, bus, rail, now: datetime):
     rows = rail_rows(rail)
     # A row is one line when the name and status fit side by side, else two.
     heights = [20 if c.width(f"{n} {st}", 2) <= W - 2 * M - 16 else 38 for n, st, _ in rows]
+    # The buses come first: rail gets what's left after two bus rows, and any
+    # lines that don't fit become a "+2 MORE" row.
+    budget = BOTTOM - BODY - 2 * 42 - 6
+    keep = len(rows)
+    while keep and sum(heights[:keep]) + (20 if keep < len(rows) else 0) > budget:
+        keep -= 1
+    more = len(rows) - keep
+    rows, heights = rows[:keep], heights[:keep]
+    if more:
+        rows.append((f"+{more} MORE", "", 1))
+        heights.append(20)
     rail_top = BOTTOM - sum(heights) + 2
     bus_bottom = rail_top - 6 if rows else BOTTOM
     if not not_ready(c, bus, "BUSES", "TFL_STOPS", BODY, bus_bottom):
@@ -257,7 +268,8 @@ def view_travel(c: Canvas, bus, rail, now: datetime):
         y = rail_top
         c.d.line((M, y - 5, W - M, y - 5), fill=0)
         for (name, short, level), h in zip(rows, heights):
-            c.dot(M + 4, y + 6, 4, filled=level > 0)
+            if short:   # the "+2 MORE" row has no dot
+                c.dot(M + 4, y + 6, 4, filled=level > 0)
             if level >= 2:   # severe: a square, so it reads differently from delays
                 c.d.rectangle((M, y + 2, M + 8, y + 10), fill=0)
             tone = GREY if level == 0 else INK

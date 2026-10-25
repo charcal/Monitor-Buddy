@@ -543,3 +543,16 @@ def test_eink_pixel_font_and_views(bridge):
     assert one.tobytes() != two.tobytes()
     light, dark = eink.render("news", news, now), eink.render("news", news, now, dark=True)
     assert all(a ^ b == 0xFF for a, b in zip(eink.panel_bytes(light), eink.panel_bytes(dark)))
+
+
+def test_eink_travel_keeps_room_for_buses():
+    import eink
+    from zoneinfo import ZoneInfo
+    now = datetime(2026, 10, 25, 14, 22, tzinfo=ZoneInfo("Europe/London"))
+    bus = {"ok": True, "stop": "NEXT BUS", "rows": [{"line": "99", "dest": "NOWHERE", "mins": [3, 9]},
+                                                   {"line": "98", "dest": "SOMEWHERE", "mins": [5]}]}
+    long_names = [{"name": f"MADE UP LINE {i}", "short": "PART SUSP", "level": 2} for i in range(3)]
+    full = eink.render("travel", {"bus": bus, "rail": {"ok": True, "all_good": False, "lines": long_names}}, now)
+    no_rail = eink.render("travel", {"bus": bus, "rail": {"ok": False}}, now)
+    # Both bus rows are drawn either way: the top of the screen matches.
+    assert full.crop((0, 0, 200, 112)).tobytes() == no_rail.crop((0, 0, 200, 112)).tobytes()
