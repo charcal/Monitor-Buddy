@@ -203,14 +203,13 @@ def view_news(c: Canvas, data, now: datetime, n: int = 0):
     if not items:
         message(c, "NO HEADLINES")
         return
-    c.text(M, BODY - 4, news_age(item.get("age_min", -1)), 2, GREY)
-    pos = f"{n + 1}/{len(items)}"
-    c.right(BODY - 4, pos, 2, GREY)
+    # Just the headline, under its source: big when it fits in five lines,
+    # else smaller, up to seven lines, so it can be read in full.
     title = item.get("title", "")
-    big = fits(title, 10, 4)
+    big = fits(title, 10, 5)
     size = 3 if big else 2
-    lines = wrap(title, 10 if big else 15, 4 if big else 6)
-    y = BODY + 22
+    lines = wrap(title, 10 if big else 15, 5 if big else 7)
+    y = BODY + 2
     for ln in lines:
         c.text(M, y, ln, size)
         y += 8 * size + 4
