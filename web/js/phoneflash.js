@@ -15,6 +15,21 @@ export class NotAPhoneBuddy extends Error {
   }
 }
 
+// The Buddy keeps its Wi-Fi networks, bridge address and key in the NVS
+// partition (huge_app.csv: 0x9000, 0x5000 long). The release image is one
+// merged file from 0x0, so it covers that range with blank padding. An update
+// writes everything except it, so the settings survive.
+export const NVS_START = 0x9000;
+export const NVS_END = 0xe000;
+
+// The pieces to write: the whole image for a fresh install (`erase`), else the
+// image in two parts around the settings.
+export function partsToWrite(image, erase) {
+  if (erase || image.length <= NVS_END) return [{ data: image, address: 0 }];
+  return [{ data: image.slice(0, NVS_START), address: 0 },
+    { data: image.slice(NVS_END), address: NVS_END }];
+}
+
 export function checkChip(chipName) {
   if (chipName !== PHONE_CHIP) throw new NotAPhoneBuddy(chipName);
 }
@@ -40,10 +55,17 @@ export async function flashPhone(serialPort, image, { erase = false, onProgress,
     }
     enter("write");
     await loader.writeFlash({
-      fileArray: [{ data: image, address: 0 }],
+      fileArray: partsToWrite(image, erase),
       flashMode: "keep", flashFreq: "keep", flashSize: "keep",
       eraseAll: false, compress: true,
-      reportProgress: (_f, written, total) => { if (onProgress) onProgress(total > 0 ? Math.min(1, written / total) : 0); },
+      reportProgress: (i, written, total) => {
+        // Two parts on an update: the first is small, so weight by size.
+        if (!onProgress || total <= 0) return;
+        const parts = partsToWrite(image, erase);
+        const before = parts.slice(0, i).reduce((n, p) => n + p.data.length, 0);
+        const all = parts.reduce((n, p) => n + p.data.length, 0);
+        onProgress(Math.min(1, (before + (written / total) * parts[i].data.length) / all));
+      },
     });
     enter("reset");
     say("Restarting the Buddy");

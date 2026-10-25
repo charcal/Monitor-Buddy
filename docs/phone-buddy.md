@@ -191,8 +191,12 @@ Monitor Buddy's firmware).
 If no port shows up: unplug, hold **BOOT**, plug back in, let go, and try
 again; afterwards press the reset button (or unplug and replug).
 
+Updates keep the Buddy's Wi-Fi networks, bridge address and key: the flasher
+writes the image around the settings area (0x9000-0xDFFF), unless you tick Erase.
+
 Without the CasaOS flasher, download `phone-buddy-<version>.bin` from the
 release and write it at address `0x0` with **https://espressif.github.io/esptool-js/**.
+That writes the whole image, so you'll need to set the Buddy up again afterwards.
 
 **Check:** the screen shows **SETUP**. (With no settings yet, it goes straight there.)
 
