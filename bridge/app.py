@@ -989,6 +989,8 @@ def api_summary():
 # EINK_VIEWS: the screens the side button steps through, in order:
 # news (the newest headline), news:2 (the second), travel (buses and rail), cal, fpl.
 # EINK_THEME=dark: white on black, like Monitor Buddy. The default is black on white.
+# Screens with nothing to show are skipped, and the cycle starts at the one that
+# suits the moment (see eink.first_view); EINK_COMMUTE sets the weekday travel times.
 
 EINK_SOURCES = {
     "news": lambda: {"news": cache.get("news", 120, lambda: _safe(fetch_news))},
@@ -1010,12 +1012,21 @@ def _int_arg(name: str, default: int) -> int:
 
 @app.get("/eink/frame")
 def eink_frame():
-    views = eink.parse_views(env("EINK_VIEWS"))
+    configured = eink.parse_views(env("EINK_VIEWS"))
+    now = datetime.now(TZ)
+    # Every source in the list (each cached), to know which screens are empty
+    # and which suits the moment. EINK_COMMUTE: weekday travel times, or "off".
+    data = {}
+    for name in dict.fromkeys(v.split(":")[0] for v in configured):
+        data.update(EINK_SOURCES[name]())
+    commute = env("EINK_COMMUTE") or eink.COMMUTE_DEFAULT
+    views = eink.arrange(configured, data, now, eink.parse_windows(commute))
+    # Screen 0 is always the one that suits the moment: switching on starts
+    # there, and the button steps on from it and wraps back round.
     page = _int_arg("v", 0) % len(views)
     batt = max(-1, min(100, _int_arg("batt", -1)))
     view = views[page]
-    data = EINK_SOURCES[view.split(":")[0]]()
-    img = eink.render(view, data, datetime.now(TZ), batt, page, len(views),
+    img = eink.render(view, data, now, batt, page, len(views),
                       dark=env("EINK_THEME").lower() == "dark")
     headers = {"X-View": str(page), "X-Views": str(len(views)), "X-View-Name": view}
     if request.args.get("fmt") == "png":

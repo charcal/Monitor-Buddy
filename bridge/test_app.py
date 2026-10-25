@@ -501,9 +501,9 @@ def test_eink_renders_every_view_and_failure():
 def test_eink_frame_route_and_keys(bridge, monkeypatch):
     monkeypatch.setattr(bridge, "fetch_news", lambda: {"ok": True, "items": []})
     c = bridge.app.test_client()
-    r = c.get("/eink/frame?v=5&batt=80")          # 5 views -> wraps to view 0
+    r = c.get("/eink/frame?v=5&batt=80")   # everything empty: just the first screen, wrapped to
     assert r.status_code == 200 and len(r.data) == 5000
-    assert r.headers["X-View"] == "0" and r.headers["X-Views"] == "5" and r.headers["X-View-Name"] == "news"
+    assert r.headers["X-View"] == "0" and r.headers["X-Views"] == "1" and r.headers["X-View-Name"] == "news"
     assert c.get("/eink/frame?fmt=png").data[:4] == b"\x89PNG"
     # Through Tailscale Funnel with no key set: refused.
     assert c.get("/eink/frame", headers={"Tailscale-Funnel-Request": "?1"}).status_code == 401
@@ -573,3 +573,41 @@ def test_eink_rail_lines_are_separate_from_the_desk(bridge, monkeypatch):
     assert asked and asked[-1].endswith("/Line/elizabeth/Status")
     out = bridge.fetch_rail(["elizabeth=LIZZIE"])
     assert out["lines"][0]["name"] == "LIZZIE" and out["lines"][0]["short"] == "DELAYS"
+
+
+def test_eink_skips_empty_screens_and_picks_the_first():
+    import eink
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo("Europe/London")
+    views = ["news", "news:2", "travel", "cal", "fpl"]
+    commute = eink.parse_windows(eink.COMMUTE_DEFAULT)
+    assert commute == [(390, 570), (990, 1140)] and eink.parse_windows("off") == []
+    sunday = datetime(2026, 10, 25, 14, 0, tzinfo=tz)
+    t = int(sunday.timestamp())
+    data = {"news": {"ok": True, "setup": True, "items": [{"title": "ONLY ONE"}]},
+            "bus": {"ok": True, "setup": True, "rows": []},
+            "rail": {"ok": True, "all_good": True, "lines": []},
+            "cal": {"ok": True, "setup": True, "events": []},
+            "fpl": {"ok": True, "setup": True, "gw": 9, "live": False, "deadline": t + 3 * 86400}}
+    # One headline, no buses, nothing on: news and fpl only, news first.
+    assert eink.arrange(views, data, sunday, commute) == ["news", "fpl"]
+    # A weekday morning with buses due: travel first, the order otherwise kept.
+    monday = datetime(2026, 10, 26, 8, 0, tzinfo=tz)
+    busy = dict(data, bus={"ok": True, "setup": True, "rows": [{"line": "89", "mins": [3]}]})
+    assert eink.arrange(views, busy, monday, commute) == ["travel", "fpl", "news"]
+    assert eink.arrange(views, busy, monday, []) == ["news", "travel", "fpl"]   # EINK_COMMUTE=off
+    # A meeting in 20 minutes beats the commute.
+    m = int(monday.timestamp())
+    meeting = dict(busy, cal={"ok": True, "setup": True,
+                              "events": [{"start": m + 1200, "end": m + 3600, "all_day": False}]})
+    assert eink.arrange(views, meeting, monday, commute)[0] == "cal"
+    # Deadline within a day (and no commute on a Sunday): fpl first.
+    close = dict(data, fpl=dict(data["fpl"], deadline=t + 5 * 3600))
+    assert eink.arrange(views, close, sunday, commute)[0] == "fpl"
+    # A broken source still shows, so you can see it's broken; unset ones don't.
+    broken = dict(data, bus={"ok": False, "setup": True, "error": "x"}, cal={"ok": False, "setup": False})
+    assert "travel" in eink.arrange(views, broken, sunday, commute)
+    assert "cal" not in eink.arrange(views, broken, sunday, commute)
+    # Rail problems keep travel even with no buses.
+    rail = dict(data, rail={"ok": True, "all_good": False, "lines": [{"name": "ELIZ", "short": "DELAYS", "level": 1}]})
+    assert "travel" in eink.arrange(views, rail, sunday, commute)

@@ -408,6 +408,94 @@ def parse_views(spec: str) -> list[str]:
     return out or ["news", "news:2", "travel", "cal", "fpl"]
 
 
+# ── Which screens, and which first ────────────────────────
+
+def has_content(view: str, data: dict, now: datetime) -> bool:
+    """False for a screen with nothing to show (no buses due, nothing on the
+    calendar, no gameweek), or for a source that isn't set up. A source that
+    is set up but failing still shows, so you can see it's broken."""
+    name, _, arg = view.partition(":")
+    if name == "news":
+        d = data.get("news")
+        if not isinstance(d, dict) or d.get("setup") is False:
+            return False
+        want = int(arg) if arg.isdigit() else 1
+        if not d.get("ok"):
+            return want == 1   # one error screen is enough
+        return len(d.get("items") or []) >= want
+    if name == "travel":
+        bus = data.get("bus")
+        if rail_rows(data.get("rail")):
+            return True
+        if not isinstance(bus, dict) or bus.get("setup") is False:
+            return False
+        return not bus.get("ok") or bool(bus.get("rows"))
+    if name == "cal":
+        d = data.get("cal")
+        if not isinstance(d, dict) or d.get("setup") is False:
+            return False
+        if not d.get("ok"):
+            return True
+        t = int(now.timestamp())
+        return any(not e.get("end") or e["end"] > t for e in d.get("events") or [])
+    if name == "fpl":
+        d = data.get("fpl")
+        if not isinstance(d, dict) or d.get("setup") is False:
+            return False
+        if not d.get("ok"):
+            return True
+        return bool(d.get("live") or d.get("gw") or (d.get("deadline") or 0) > now.timestamp())
+    return True
+
+
+def parse_windows(spec: str) -> list[tuple[int, int]]:
+    """EINK_COMMUTE, e.g. '06:30-09:30,16:30-19:00', as minutes since midnight.
+    'off' turns the commute rule off."""
+    out = []
+    for part in (spec or "").split(","):
+        a, _, b = part.strip().partition("-")
+        try:
+            (h1, m1), (h2, m2) = (map(int, x.split(":")) for x in (a, b))
+        except ValueError:
+            continue
+        out.append((h1 * 60 + m1, h2 * 60 + m2))
+    return out
+
+
+COMMUTE_DEFAULT = "06:30-09:30,16:30-19:00"
+
+
+def first_view(views: list[str], data: dict, now: datetime, commute: list[tuple[int, int]]) -> str:
+    """The screen that suits the moment, first match wins:
+    1. Calendar, when something starts within 30 minutes or is happening now.
+    2. Travel, on a weekday inside a commute window.
+    3. Fantasy PL, while a gameweek is live or the deadline is within 24 hours.
+    4. Otherwise the first screen in EINK_VIEWS."""
+    t = int(now.timestamp())
+    cal = data.get("cal") if isinstance(data.get("cal"), dict) else {}
+    if "cal" in views and cal.get("ok"):
+        for e in cal.get("events") or []:
+            if not e.get("all_day") and e.get("start") and e["start"] - 30 * 60 <= t < e.get("end", e["start"]):
+                return "cal"
+    mins = now.hour * 60 + now.minute
+    if "travel" in views and now.weekday() < 5 and any(a <= mins < b for a, b in commute):
+        return "travel"
+    fpl = data.get("fpl") if isinstance(data.get("fpl"), dict) else {}
+    if "fpl" in views and fpl.get("ok") and (
+            fpl.get("live") or 0 < (fpl.get("deadline") or 0) - t <= 86400):
+        return "fpl"
+    return views[0]
+
+
+def arrange(views: list[str], data: dict, now: datetime, commute: list[tuple[int, int]]) -> list[str]:
+    """The screens to cycle through: empty ones dropped, then turned round so
+    the one that suits the moment comes first (the order is otherwise kept)."""
+    active = [v for v in views if has_content(v, data, now)] or views[:1]
+    first = first_view(active, data, now, commute)
+    i = active.index(first)
+    return active[i:] + active[:i]
+
+
 def render(view: str, data: dict, now: datetime, batt: int = -1, page: int = 0, pages: int = 1,
            dark: bool = False):
     """`data` holds the bridge's JSON for the sources this view uses:

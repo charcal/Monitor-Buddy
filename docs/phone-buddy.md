@@ -27,6 +27,20 @@ In order: **Headlines** (one a screen, big when it is short; the newest two by d
 buses, plus any rail lines with problems), **Calendar** (next three events) and
 **Fantasy PL** (gameweek points, total, league rank, next deadline).
 
+**Screens with nothing to show are skipped**: no buses due and no rail
+problems, nothing on the calendar, no gameweek. A source that's set up but
+failing still shows, so you can see it's broken.
+
+**The first screen suits the moment.** Switching on (and wrapping round) starts at:
+
+1. **Calendar**, when something starts within 30 minutes or is on now;
+2. **Travel**, on a weekday during your commute (`EINK_COMMUTE`, by default
+   `06:30-09:30,16:30-19:00`; `off` to turn it off);
+3. **Fantasy PL**, while a gameweek is live or the deadline is within 24 hours;
+4. otherwise the first screen in `EINK_VIEWS`.
+
+The rest follow in your `EINK_VIEWS` order.
+
 Every screen shows the time it was fetched in the top-right corner, so you know
 how fresh it is. The dots at the bottom show where you are in the cycle.
 
