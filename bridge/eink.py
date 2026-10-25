@@ -8,7 +8,7 @@ tested without a network or a device.
 The look follows Monitor Buddy's pages (web/js/preview.js): its 5x7 pixel font
 at whole-number sizes, a small label at the top, big values, secondary text
 in grey and page dots along the bottom. E-ink has no grey, so grey is a
-checkerboard of the font's pixels.
+pattern of three dots in every four.
 
     render(view, data, now, batt, page, pages, dark) -> PIL image, 200 x 200, mode "1"
     panel_bytes(image)                                -> 5000 bytes for the panel
@@ -58,10 +58,11 @@ class Canvas:
                     if bit != "#":
                         continue
                     px, py = ox + c * size, y + r * size
-                    if tone == GREY:
+                    if tone == GREY:   # 3 dots in every 2x2: a dark grey that stays readable
                         for yy in range(py, py + size):
-                            for xx in range(px + (yy + px) % 2, px + size, 2):
-                                self.img.putpixel((xx, yy), 0)
+                            for xx in range(px, px + size):
+                                if xx % 2 == 0 or yy % 2 == 0:
+                                    self.img.putpixel((xx, yy), 0)
                     else:
                         self.d.rectangle((px, py, px + size - 1, py + size - 1), fill=0)
 

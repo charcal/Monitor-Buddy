@@ -31,7 +31,7 @@ Every screen shows the time it was fetched in the top-right corner, so you know
 how fresh it is. The dots at the bottom show where you are in the cycle.
 
 They use Monitor Buddy's chunky 5x7 pixel font and layout: a small label at the
-top, big values, and secondary text in grey (a fine checkerboard, as e-ink has
+top, big values, and secondary text in grey (a fine dot pattern, as e-ink has
 no grey).
 
 To change the order or the number of headlines, set `EINK_VIEWS` in the
