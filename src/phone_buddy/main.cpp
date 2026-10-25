@@ -60,6 +60,12 @@ static const char *AP_NAME = "Phone-Buddy";
 // Kept through deep sleep (lost when switched off, which is fine).
 RTC_DATA_ATTR static int rtcView = 0;
 RTC_DATA_ATTR static int rtcLastNet = 0;
+// The access point and channel that last worked: joining it directly skips
+// the Wi-Fi search, a second or two on every press.
+RTC_DATA_ATTR static uint8_t rtcBssid[6];
+RTC_DATA_ATTR static int32_t rtcChannel = 0;   // 0: not known yet
+static const uint32_t WIFI_FAST_MS = 4000;
+static String lastAt;   // when the saved screen was fetched ("14:22"), from the bridge
 // What the panel shows now, for fast (partial) refreshes: the controller needs
 // the old picture as well as the new one, and loses both when its power is cut.
 RTC_DATA_ATTR static uint8_t rtcShown[W * H / 8];
@@ -283,13 +289,32 @@ static void notice(const char *title, const char *const lines[], int n) {
 }
 
 // The OFFLINE strip along the bottom, over the bridge's page dots.
+// The strip along the bottom when the screen is out of date: the time the
+// screen is from, and why it couldn't be updated ("14:22 NO WI-FI").
 static void offlineBand(const char *why) {
   const int h = kSmall.height + 6;
-  fillRect(0, H - h, W, h, true);
+  // Black on a light screen, white on a dark one (judged by the corner pixel).
+  bool ink = fb[(H - 1) * (W / 8)] & 0x80;   // corner is white: a light screen
+  fillRect(0, H - h, W, h, ink);
   char text[48];
-  snprintf(text, sizeof text, "OFFLINE: %s", why);
-  if (textWidth(kSmall, text) > W - 8) snprintf(text, sizeof text, "%s", why);   // just the reason
-  centred(H - h + 3, kSmall, text, false);
+  snprintf(text, sizeof text, "%s %s", lastAt.c_str(), why);
+  if (!lastAt.length() || textWidth(kSmall, text) > W - 8) {
+    if (lastAt.length()) snprintf(text, sizeof text, "OFFLINE %s", lastAt.c_str());
+    else snprintf(text, sizeof text, "OFFLINE: %s", why);
+    if (textWidth(kSmall, text) > W - 8) snprintf(text, sizeof text, "%s", why);
+  }
+  centred(H - h + 3, kSmall, text, !ink);
+}
+
+// The "working on it" mark: three dots in a box in the top-right corner,
+// drawn by inverting pixels so it shows on light and dark screens alike.
+static void busyMark() {
+  const int x0 = W - 30, y0 = 5, w = 24, h = 14;
+  for (int y = y0; y < y0 + h; y++)
+    for (int x = x0; x < x0 + w; x++) {
+      bool dot = y >= y0 + 5 && y < y0 + 9 && ((x - x0 - 3) % 7) < 4 && x - x0 >= 3 && x - x0 < 21;
+      if (!dot) fb[y * (W / 8) + (x >> 3)] ^= 0x80 >> (x & 7);
+    }
 }
 
 // ── Settings and the last good screen (flash, survives power-off) ──
@@ -308,6 +333,7 @@ static void loadSettings() {
 static bool loadLastScreen() {
   prefs.begin("pb", true);
   bool ok = prefs.getBytes("last", fb, FB_LEN) == FB_LEN;
+  lastAt = prefs.getString("lastat", "");
   prefs.end();
   return ok;
 }
@@ -315,6 +341,7 @@ static bool loadLastScreen() {
 static void saveLastScreen() {
   prefs.begin("pb", false);
   prefs.putBytes("last", fb, FB_LEN);
+  prefs.putString("lastat", lastAt);
   prefs.end();
 }
 
@@ -406,11 +433,25 @@ static bool joinWifi() {
     int i = (rtcLastNet + k) % 2;
     if (!cfg.ssid[i].length()) continue;
     Serial.printf("wifi: trying %s\n", cfg.ssid[i].c_str());
-    WiFi.begin(cfg.ssid[i].c_str(), cfg.pass[i].c_str());
     uint32_t t = millis();
+    if (k == 0 && rtcChannel > 0) {   // straight to the access point that worked last time
+      WiFi.begin(cfg.ssid[i].c_str(), cfg.pass[i].c_str(), rtcChannel, rtcBssid);
+      while (WiFi.status() != WL_CONNECTED && millis() - t < WIFI_FAST_MS) delay(20);
+      if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("wifi: quick join failed, searching");
+        WiFi.disconnect(true);
+        delay(50);
+        rtcChannel = 0;
+        t = millis();
+      }
+    }
+    if (WiFi.status() != WL_CONNECTED) WiFi.begin(cfg.ssid[i].c_str(), cfg.pass[i].c_str());
     while (WiFi.status() != WL_CONNECTED && millis() - t < WIFI_TIMEOUT_MS) delay(50);
     if (WiFi.status() == WL_CONNECTED) {
+      Serial.printf("wifi: joined in %lu ms\n", (unsigned long)(millis() - t));
       rtcLastNet = i;
+      rtcChannel = WiFi.channel();
+      memcpy(rtcBssid, WiFi.BSSID(), 6);
       return true;
     }
     WiFi.disconnect(true);
@@ -450,8 +491,8 @@ static String fetchScreen(int want, int batt) {
   http.setTimeout(15000);
   http.setConnectTimeout(10000);
   if (cfg.key.length()) http.addHeader("X-Phone-Key", cfg.key);
-  const char *keep[] = {"X-View"};
-  http.collectHeaders(keep, 1);
+  const char *keep[] = {"X-View", "X-Time"};
+  http.collectHeaders(keep, 2);
   int code = http.GET();
   if (code != 200) {
     http.end();
@@ -464,6 +505,7 @@ static String fetchScreen(int want, int batt) {
   BufferSink sink(buf, FB_LEN);
   int wrote = http.writeToStream(&sink);
   String view = http.header("X-View");
+  String at = http.header("X-Time");
   http.end();
   if (wrote < 0 || sink.count != FB_LEN) {
     Serial.printf("short read: %d, %u bytes\n", wrote, (unsigned)sink.count);
@@ -471,6 +513,7 @@ static String fetchScreen(int want, int batt) {
   }
   memcpy(fb, buf, FB_LEN);
   if (view.length()) rtcView = view.toInt();
+  lastAt = at.substring(0, 5);
   return "";
 }
 
@@ -582,6 +625,15 @@ void setup() {
     waitForButtonsUp();
   }
   if (!cfg.ready()) setupMode();
+
+  // A button press: show the "working on it" mark straight away (a quick
+  // partial refresh), as fetching the screen takes a few seconds. Only when
+  // the next refresh can be partial too, so this never costs a flash.
+  if (pins && rtcShownValid && rtcPartials + 2 < FULL_EVERY) {
+    memcpy(fb, rtcShown, FB_LEN);
+    busyMark();
+    epdShow(fb);
+  }
 
   int batt = batteryPercent();
   if (batt >= 0 && batt <= BATT_EMPTY) switchOff(true);   // before Wi-Fi drains it further

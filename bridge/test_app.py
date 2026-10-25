@@ -506,6 +506,7 @@ def test_eink_frame_route_and_keys(bridge, monkeypatch):
     r = c.get("/eink/frame?v=5&batt=80")   # everything empty: just the first screen, wrapped to
     assert r.status_code == 200 and len(r.data) == 5000
     assert r.headers["X-View"] == "0" and r.headers["X-Views"] == "1" and r.headers["X-View-Name"] == "news"
+    assert len(r.headers["X-Time"]) == 5 and r.headers["X-Time"][2] == ":"
     assert c.get("/eink/frame?fmt=png").data[:4] == b"\x89PNG"
     # Through Tailscale Funnel with no key set: refused.
     assert c.get("/eink/frame", headers={"Tailscale-Funnel-Request": "?1"}).status_code == 401

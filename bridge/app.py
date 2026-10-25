@@ -1028,7 +1028,8 @@ def eink_frame():
     view = views[page]
     img = eink.render(view, data, now, batt, page, len(views),
                       dark=env("EINK_THEME").lower() == "dark")
-    headers = {"X-View": str(page), "X-Views": str(len(views)), "X-View-Name": view}
+    headers = {"X-View": str(page), "X-Views": str(len(views)), "X-View-Name": view,
+               "X-Time": now.strftime("%H:%M")}   # the Buddy shows it when this screen goes stale
     if request.args.get("fmt") == "png":
         import io
         buf = io.BytesIO()

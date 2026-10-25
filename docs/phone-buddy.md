@@ -41,8 +41,13 @@ failing still shows, so you can see it's broken.
 
 The rest follow in your `EINK_VIEWS` order.
 
-Every screen shows the time it was fetched in the top-right corner, so you know
-how fresh it is. The dots at the bottom show where you are in the cycle.
+The dots at the bottom show where you are in the cycle. There's no clock on the
+screens: on a screen that stays put, it read as the time now.
+
+**When you press a button**, a small box with three dots appears in the top
+right straight away, so you know it's working; the new screen replaces it a
+couple of seconds later. The Buddy remembers the Wi-Fi access point that
+worked last time and goes straight to it, which saves a second or two.
 
 They use Monitor Buddy's chunky 5x7 pixel font and layout: a small label at the
 top, big values, and secondary text in grey (a fine dot pattern, as e-ink has
@@ -64,8 +69,9 @@ ghosting.
 At 3% the Buddy shows **PLEASE CHARGE** and switches itself off, to protect
 the battery. (On USB power with no battery fitted, neither happens.)
 
-If the Buddy can't fetch a screen it keeps the last one and adds a black
-**OFFLINE** strip at the bottom, with the reason:
+If the Buddy can't fetch a screen it keeps the last one and adds a strip at the
+bottom with **the time that screen is from** and the reason, like
+`14:22 NO WI-FI` (or `OFFLINE 14:22` when both don't fit):
 
 | Strip says | What it means |
 |---|---|

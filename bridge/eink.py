@@ -120,11 +120,10 @@ def fits(text: str, cols: int, max_lines: int) -> bool:
 
 
 def label_row(c: Canvas, label: str, now: datetime):
-    """The top row: the page's label, and the time it was fetched in grey."""
-    clock = now.strftime("%H:%M")
-    c.right(TOP, clock, 2, GREY)
-    room = W - 2 * M - c.width(clock, 2) - 8
-    c.text(M, TOP, fit_chars(label, 2, room), 2)
+    """The top row: the page's label. No clock: on a screen that stays put it
+    read as the time now. When a screen is out of date, the Buddy's OFFLINE
+    strip says when it was fetched (the X-Time header)."""
+    c.text(M, TOP, fit_chars(label, 2, W - 2 * M), 2)
 
 
 def battery(c: Canvas, pct: int):
@@ -362,7 +361,7 @@ def view_fpl(c: Canvas, data, now: datetime):
     t = int(now.timestamp())
     countdown = f.get("ok") and not f.get("live") and f.get("next_gw") and (f.get("deadline") or 0) > t
     if countdown:
-        label_row(c, f"GW{f['next_gw']} IN", now)   # reads "GW10 IN / 2D 04H"
+        label_row(c, f"GW{f['next_gw']} DEADLINE", now)
     elif f.get("ok") and f.get("gw"):
         label_row(c, f"GW{f['gw']} LIVE" if f.get("live") else f"GW{f['gw']}", now)
         if f.get("live"):
