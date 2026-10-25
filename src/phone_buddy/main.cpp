@@ -419,6 +419,23 @@ static bool joinWifi() {
   return false;
 }
 
+// Collects an HTTP body into a fixed buffer; `count` keeps going past the end,
+// so a body of the wrong size is caught.
+struct BufferSink : public Stream {
+  uint8_t *buf;
+  size_t cap, count = 0;
+  BufferSink(uint8_t *b, size_t c) : buf(b), cap(c) {}
+  size_t write(uint8_t c) override { return write(&c, 1); }
+  size_t write(const uint8_t *data, size_t n) override {
+    for (size_t i = 0; i < n; i++, count++)
+      if (count < cap) buf[count] = data[i];
+    return n;
+  }
+  int available() override { return 0; }
+  int read() override { return -1; }
+  int peek() override { return -1; }
+};
+
 // Downloads view `want` into fb. Returns "" on success, else a short reason.
 static String fetchScreen(int want, int batt) {
   String url = cfg.url;
@@ -441,13 +458,17 @@ static String fetchScreen(int want, int batt) {
     if (code == 401) return "WRONG KEY";
     return code > 0 ? "BRIDGE " + String(code) : "NO BRIDGE";
   }
+  // writeToStream reads the whole body, chunked or not, waiting up to the
+  // 15 s timeout above for each piece (a hotspot can be slow).
   static uint8_t buf[FB_LEN];
-  WiFiClient *s = http.getStreamPtr();
-  s->setTimeout(10);
-  size_t got = s->readBytes(buf, FB_LEN);
+  BufferSink sink(buf, FB_LEN);
+  int wrote = http.writeToStream(&sink);
   String view = http.header("X-View");
   http.end();
-  if (got != FB_LEN) return "SHORT READ";
+  if (wrote < 0 || sink.count != FB_LEN) {
+    Serial.printf("short read: %d, %u bytes\n", wrote, (unsigned)sink.count);
+    return "SHORT READ";
+  }
   memcpy(fb, buf, FB_LEN);
   if (view.length()) rtcView = view.toInt();
   return "";
