@@ -53,7 +53,13 @@ They use Monitor Buddy's chunky 5x7 pixel font and layout: a small label at the
 top, big values, and secondary text in grey (a fine dot pattern, as e-ink has
 no grey).
 
-To change the order or the number of headlines, set `EINK_VIEWS` in the
+**The easy way to change all of this** is the settings page on your flasher:
+**https://192.168.86.48:9443/phone-settings.html**. Tick and order the screens,
+pick light or dark, choose rail lines and their short names, and set your
+commute times; it shows a live preview, and saved settings take priority over
+the `.env`. ("Use the .env instead" forgets them.)
+
+Or by hand: to change the order or the number of headlines, set `EINK_VIEWS` in the
 bridge's `.env`, for example `EINK_VIEWS=news,news:2,news:3,travel,fpl`. For
 white on black, like Monitor Buddy on your desk, add `EINK_THEME=dark`. To
 choose which rail lines Travel watches, separately from the desk Buddy, set

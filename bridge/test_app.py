@@ -625,3 +625,29 @@ def test_eink_low_battery_strip():
     ok = eink.render("news", news, now, batt=80)
     bottom = lambda im: im.crop((0, 185, 200, 200)).convert("L").tobytes()
     assert sum(v == 0 for v in bottom(low)) > sum(v == 0 for v in bottom(ok)) * 4   # mostly black
+
+
+def test_eink_settings_page_api(bridge, monkeypatch):
+    monkeypatch.setenv("EINK_VIEWS", "news,fpl")
+    monkeypatch.setattr(bridge, "fetch_news", lambda: {"ok": True, "setup": True, "items": [{"title": "A"}]})
+    monkeypatch.setattr(bridge, "fetch_rail", lambda entries=None: {"ok": True, "all_good": True, "lines": []})
+    c = bridge.app.test_client()
+    got = c.get("/api/eink-settings").get_json()
+    assert got["views"] == ["news", "fpl"] and got["theme"] == "light" and not got["saved"]
+    body = {"views": ["travel", "news", "news:2"], "theme": "dark",
+            "rail": [{"id": "elizabeth", "label": "Eliz"}], "commute": [["07:00", "09:00"]]}
+    saved = c.post("/api/eink-settings", json=body).get_json()
+    assert saved["saved"] and saved["views"] == ["travel", "news", "news:2"] and saved["theme"] == "dark"
+    assert saved["rail"] == [{"id": "elizabeth", "label": "ELIZ"}] and saved["commute"] == [["07:00", "09:00"]]
+    assert bridge.eink_setting("EINK_VIEWS") == "travel,news,news:2"   # the page beats the .env
+    # No rail lines at all, and commute off.
+    off = c.post("/api/eink-settings", json=dict(body, rail=[], commute="off")).get_json()
+    assert off["rail"] == [] and off["commute"] == [] and bridge.eink_rail() == {"ok": False, "setup": False}
+    # Bad input is refused and nothing changes.
+    bad = c.post("/api/eink-settings", json=dict(body, views=["nope"], commute=[["9:00", "08:00"]]))
+    assert bad.status_code == 400 and len(bad.get_json()["errors"]) >= 2
+    assert bridge.eink_setting("EINK_VIEWS") == "travel,news,news:2"
+    # The preview is a PNG; reset goes back to the .env.
+    r = c.get("/api/eink-preview?v=0")
+    assert r.data[:4] == b"\x89PNG" and r.headers["X-Views"]
+    assert c.post("/api/eink-settings", json={"reset": True}).get_json()["views"] == ["news", "fpl"]

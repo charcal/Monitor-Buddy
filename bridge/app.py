@@ -20,6 +20,8 @@ upper-case ASCII that its 5x7 font can draw, already cut to fit.
     GET /spotify/login     one-time Spotify sign-in (stores a refresh token in /data)
     GET /eink/frame        Phone Buddy: one 200x200 e-ink screen as 5000 raw bytes
                            (?v=view number, ?batt=battery %, ?fmt=png to look at it)
+    GET/POST /api/eink-settings   Phone Buddy settings, for the flasher's settings page
+    GET /api/eink-preview  a Phone Buddy screen as a PNG, for that page
 
 Everything is configured with environment variables; see .env.example.
 """
@@ -986,18 +988,52 @@ def api_summary():
 
 
 # ── Phone Buddy (e-ink) ───────────────────────────────────
+# These EINK_ settings can also be changed on the flasher's Phone Buddy
+# settings page, which saves them over the .env (see eink_setting).
 # EINK_VIEWS: the screens the side button steps through, in order:
 # news (the newest headline), news:2 (the second), travel (buses and rail), cal, fpl.
 # EINK_THEME=dark: white on black, like Monitor Buddy. The default is black on white.
 # Screens with nothing to show are skipped, and the cycle starts at the one that
 # suits the moment (see eink.first_view); EINK_COMMUTE sets the weekday travel times.
 
+# Settings saved from the flasher's Phone Buddy settings page
+# (phone-settings.html) take priority over the .env: /data/eink-settings.json.
+EINK_SETTINGS_FILE = DATA_DIR / "eink-settings.json"
+EINK_KEYS = ("EINK_VIEWS", "EINK_THEME", "EINK_RAIL", "EINK_COMMUTE")
+_RAIL_ID = re.compile(r"^[a-z][a-z0-9-]{1,30}$")
+_HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+def eink_saved() -> dict:
+    try:
+        data = json.loads(EINK_SETTINGS_FILE.read_text())
+        return {k: str(v) for k, v in data.items() if k in EINK_KEYS} if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def eink_setting(name: str) -> str:
+    saved = eink_saved()
+    return saved[name].strip() if name in saved else env(name)
+
+
+def eink_rail_spec() -> str:
+    """EINK_RAIL: other lines than the desk Buddy's (same format as RAIL_LINES),
+    or "none" for no rail on Travel. Empty: the desk Buddy's lines."""
+    return eink_setting("EINK_RAIL")
+
+
+def eink_rail() -> dict:
+    spec = eink_rail_spec()
+    if spec.lower() == "none":
+        return {"ok": False, "setup": False}
+    entries = [p.strip() for p in re.split(r"[,\n]", spec) if p.strip()]
+    return cache.get(f"rail:eink:{spec}", 60, lambda: _safe(lambda: fetch_rail(entries or None)))
+
+
 EINK_SOURCES = {
     "news": lambda: {"news": cache.get("news", 120, lambda: _safe(fetch_news))},
-    "travel": lambda: {"bus": cache.get("bus", 15, lambda: _safe(fetch_bus)),
-                       # EINK_RAIL: other lines than the desk Buddy's, same format as RAIL_LINES.
-                       "rail": cache.get("rail:eink", 60, lambda: _safe(
-                           lambda: fetch_rail(env_list("EINK_RAIL") or None)))},
+    "travel": lambda: {"bus": cache.get("bus", 15, lambda: _safe(fetch_bus)), "rail": eink_rail()},
     "cal": lambda: {"cal": cache.get("cal:False", 60, lambda: _safe(lambda: fetch_cal(False)))},
     "fpl": lambda: {"fpl": cache.get("fpl", 60, lambda: _safe(fetch_fpl))},
 }
@@ -1010,32 +1046,137 @@ def _int_arg(name: str, default: int) -> int:
         return default
 
 
-@app.get("/eink/frame")
-def eink_frame():
-    configured = eink.parse_views(env("EINK_VIEWS"))
+def eink_build(v: int, batt: int):
+    """One Phone Buddy screen: (image, headers)."""
+    configured = eink.parse_views(eink_setting("EINK_VIEWS"))
     now = datetime.now(TZ)
     # Every source in the list (each cached), to know which screens are empty
     # and which suits the moment. EINK_COMMUTE: weekday travel times, or "off".
     data = {}
     for name in dict.fromkeys(v.split(":")[0] for v in configured):
         data.update(EINK_SOURCES[name]())
-    commute = env("EINK_COMMUTE") or eink.COMMUTE_DEFAULT
+    commute = eink_setting("EINK_COMMUTE") or eink.COMMUTE_DEFAULT
     views = eink.arrange(configured, data, now, eink.parse_windows(commute))
     # Screen 0 is always the one that suits the moment: switching on starts
     # there, and the button steps on from it and wraps back round.
-    page = _int_arg("v", 0) % len(views)
-    batt = max(-1, min(100, _int_arg("batt", -1)))
+    page = v % len(views)
     view = views[page]
-    img = eink.render(view, data, now, batt, page, len(views),
-                      dark=env("EINK_THEME").lower() == "dark")
+    img = eink.render(view, data, now, max(-1, min(100, batt)), page, len(views),
+                      dark=eink_setting("EINK_THEME").lower() == "dark")
     headers = {"X-View": str(page), "X-Views": str(len(views)), "X-View-Name": view,
                "X-Time": now.strftime("%H:%M")}   # the Buddy shows it when this screen goes stale
+    return img, headers
+
+
+def _png(img) -> bytes:
+    import io
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
+
+
+@app.get("/eink/frame")
+def eink_frame():
+    img, headers = eink_build(_int_arg("v", 0), _int_arg("batt", -1))
     if request.args.get("fmt") == "png":
-        import io
-        buf = io.BytesIO()
-        img.save(buf, "PNG")
-        return buf.getvalue(), 200, {**headers, "Content-Type": "image/png"}
+        return _png(img), 200, {**headers, "Content-Type": "image/png"}
     return eink.panel_bytes(img), 200, {**headers, "Content-Type": "application/octet-stream"}
+
+
+# The settings page's API. Under /api/, so on the LAN only (Funnel publishes
+# /eink/ alone) and behind BUDDY_KEY when that is set.
+
+def eink_settings_json() -> dict:
+    views = eink.parse_views(eink_setting("EINK_VIEWS"))
+    rail_spec = eink_rail_spec()
+    rail = []
+    if rail_spec.lower() != "none":
+        for e in [p.strip() for p in re.split(r"[,\n]", rail_spec or env("RAIL_LINES") or RAIL_DEFAULT) if p.strip()]:
+            lid, _, label = e.partition("=")
+            rail.append({"id": lid.strip().lower(), "label": label.strip()})
+    commute = eink_setting("EINK_COMMUTE") or eink.COMMUTE_DEFAULT
+    windows = [] if commute.lower() == "off" else [
+        [f"{a // 60:02d}:{a % 60:02d}", f"{b // 60:02d}:{b % 60:02d}"] for a, b in eink.parse_windows(commute)]
+    return {"ok": True, "views": views, "theme": "dark" if eink_setting("EINK_THEME").lower() == "dark" else "light",
+            "rail": rail, "commute": windows, "saved": bool(eink_saved()),
+            "available_views": ["news", "news:2", "news:3", "travel", "cal", "fpl"]}
+
+
+def eink_validate(body: dict) -> tuple[dict, list[str]]:
+    errors, out = [], {}
+    views = body.get("views")
+    if not isinstance(views, list) or not views:
+        errors.append("pick at least one screen")
+    else:
+        picked = eink.parse_views(",".join(str(v) for v in views))
+        if picked != [str(v).strip().lower() for v in views]:
+            errors.append("unknown screen")
+        out["EINK_VIEWS"] = ",".join(picked)
+    theme = body.get("theme", "light")
+    if theme not in ("light", "dark"):
+        errors.append("theme must be light or dark")
+    out["EINK_THEME"] = "dark" if theme == "dark" else ""
+    rail = body.get("rail", [])
+    if not isinstance(rail, list):
+        errors.append("rail must be a list")
+        rail = []
+    parts = []
+    for r in rail[:6]:
+        lid = str((r or {}).get("id", "")).strip().lower()
+        if not _RAIL_ID.match(lid):
+            errors.append(f"bad rail line id: {lid or '(empty)'}")
+            continue
+        label = clean(str(r.get("label") or ""), 12)
+        parts.append(f"{lid}={label}" if label else lid)
+    out["EINK_RAIL"] = ",".join(parts) or "none"
+    commute = body.get("commute", [])
+    if commute in ("off", []):
+        out["EINK_COMMUTE"] = "off"
+    elif isinstance(commute, list):
+        wins = []
+        for w in commute[:4]:
+            if (not isinstance(w, list) or len(w) != 2 or not all(_HHMM.match(str(t)) for t in w)
+                    or str(w[0]) >= str(w[1])):
+                errors.append("commute times must be HH:MM, start before end")
+                continue
+            wins.append(f"{w[0]}-{w[1]}")
+        out["EINK_COMMUTE"] = ",".join(wins) or "off"
+    else:
+        errors.append("commute must be a list of [start, end] or off")
+    return out, errors
+
+
+@app.get("/api/eink-settings")
+def api_eink_settings():
+    return jsonify(eink_settings_json())
+
+
+@app.post("/api/eink-settings")
+def api_eink_settings_save():
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"ok": False, "errors": ["send JSON"]}), 400
+    if body.get("reset"):   # back to the .env
+        try:
+            EINK_SETTINGS_FILE.unlink()
+        except FileNotFoundError:
+            pass
+        return jsonify(eink_settings_json())
+    settings, errors = eink_validate(body)
+    if errors:
+        return jsonify({"ok": False, "errors": errors}), 400
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = EINK_SETTINGS_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(settings, indent=1))
+    tmp.replace(EINK_SETTINGS_FILE)
+    return jsonify(eink_settings_json())
+
+
+@app.get("/api/eink-preview")
+def api_eink_preview():
+    """A screen as a PNG for the settings page, without the Phone Buddy key."""
+    img, headers = eink_build(_int_arg("v", 0), _int_arg("batt", 80))
+    return _png(img), 200, {**headers, "Content-Type": "image/png"}
 
 
 _spotify_states: dict[str, float] = {}
