@@ -36,7 +36,10 @@ no grey).
 
 To change the order or the number of headlines, set `EINK_VIEWS` in the
 bridge's `.env`, for example `EINK_VIEWS=news,news:2,news:3,travel,fpl`. For
-white on black, like Monitor Buddy on your desk, add `EINK_THEME=dark`.
+white on black, like Monitor Buddy on your desk, add `EINK_THEME=dark`. To
+choose which rail lines Travel watches, separately from the desk Buddy, set
+`EINK_RAIL` like `RAIL_LINES`, e.g. `EINK_RAIL=elizabeth=LIZZIE`. A line only
+appears when it has problems.
 
 If the Buddy can't fetch a screen it keeps the last one and adds a black
 **OFFLINE** strip at the bottom, with the reason:

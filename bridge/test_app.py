@@ -556,3 +556,20 @@ def test_eink_travel_keeps_room_for_buses():
     no_rail = eink.render("travel", {"bus": bus, "rail": {"ok": False}}, now)
     # Both bus rows are drawn either way: the top of the screen matches.
     assert full.crop((0, 0, 200, 112)).tobytes() == no_rail.crop((0, 0, 200, 112)).tobytes()
+
+
+def test_eink_rail_lines_are_separate_from_the_desk(bridge, monkeypatch):
+    monkeypatch.setenv("EINK_RAIL", "elizabeth=LIZZIE")
+    asked = []
+
+    def fake_get(url, **k):
+        asked.append(url)
+        return Resp([{"id": "elizabeth", "name": "Elizabeth line",
+                      "lineStatuses": [{"statusSeverity": 9, "statusSeverityDescription": "Minor Delays"}]}])
+    monkeypatch.setattr(bridge.session, "get", fake_get)
+    monkeypatch.setattr(bridge, "fetch_bus", lambda: {"ok": True, "rows": []})
+    c = bridge.app.test_client()
+    assert c.get("/eink/frame?v=2").status_code == 200
+    assert asked and asked[-1].endswith("/Line/elizabeth/Status")
+    out = bridge.fetch_rail(["elizabeth=LIZZIE"])
+    assert out["lines"][0]["name"] == "LIZZIE" and out["lines"][0]["short"] == "DELAYS"

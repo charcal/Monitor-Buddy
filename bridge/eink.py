@@ -218,8 +218,7 @@ def view_news(c: Canvas, data, now: datetime, n: int = 0):
 def rail_rows(rail) -> list[tuple[str, str, int]]:
     if not (isinstance(rail, dict) and rail.get("ok")):
         return []
-    if rail.get("all_good"):
-        return [("RAIL", "GOOD", 0)]
+    # Only problems are shown; when everything's running the buses get the room.
     return [(l["name"], l["short"], l["level"]) for l in rail.get("lines", []) if l.get("level", 0) > 0][:3]
 
 

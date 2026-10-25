@@ -762,8 +762,8 @@ RAIL_SHORT = {10: "GOOD", 18: "GOOD", 19: "INFO", 9: "DELAYS", 6: "SEVERE", 7: "
               8: "BUS SERVICE", 17: "ISSUES", 12: "EXIT ONLY", 13: "NO STEP FREE", 0: "SPECIAL"}
 
 
-def fetch_rail() -> dict:
-    entries = env_list("RAIL_LINES") or RAIL_DEFAULT.split(",")
+def fetch_rail(entries: list[str] | None = None) -> dict:
+    entries = entries or env_list("RAIL_LINES") or RAIL_DEFAULT.split(",")
     ids, labels = [], {}
     for e in entries[:6]:
         lid, _, label = e.partition("=")
@@ -993,7 +993,9 @@ def api_summary():
 EINK_SOURCES = {
     "news": lambda: {"news": cache.get("news", 120, lambda: _safe(fetch_news))},
     "travel": lambda: {"bus": cache.get("bus", 15, lambda: _safe(fetch_bus)),
-                       "rail": cache.get("rail", 60, lambda: _safe(fetch_rail))},
+                       # EINK_RAIL: other lines than the desk Buddy's, same format as RAIL_LINES.
+                       "rail": cache.get("rail:eink", 60, lambda: _safe(
+                           lambda: fetch_rail(env_list("EINK_RAIL") or None)))},
     "cal": lambda: {"cal": cache.get("cal:False", 60, lambda: _safe(lambda: fetch_cal(False)))},
     "fpl": lambda: {"fpl": cache.get("fpl", 60, lambda: _safe(fetch_fpl))},
 }
