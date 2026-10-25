@@ -32,7 +32,7 @@ DOTS_Y = H - 9         # page dots
 BOTTOM = H - 20        # content stops above the dots
 INK, GREY = "ink", "grey"
 
-VIEWS = ("news", "weather", "travel", "cal", "fpl")
+VIEWS = ("news", "weather", "travel", "cal", "fpl", "bins")
 LOW_BATTERY = 15       # percent: the bottom strip asks to be charged
 
 
@@ -350,6 +350,44 @@ def view_weather(c: Canvas, w, now: datetime):
     c.text(M, BOTTOM - 36, f"WIND {w.get('wind', 0)} MPH", 2, GREY)
 
 
+def view_bins(c: Canvas, b, now: datetime):
+    """Monitor Buddy's Bin day page: the next collection day big (in a black
+    badge when it's today or tomorrow), the bins, and the one after."""
+    label_row(c, "BIN DAY", now)
+    if not_ready(c, b, "BIN DAY", "BINS"):
+        return
+    days = b.get("days") or []
+    if not days:
+        message(c, "NO COLLECTIONS", "IN THE NEXT THREE WEEKS")
+        return
+    nxt = days[0]
+    day = str(nxt.get("day", ""))
+    size = fit_size(day, W - 2 * M - 12, 5)
+    y = BODY + 2
+    if nxt.get("in_days", 9) <= 1:   # soon: white on a black badge
+        w, h = c.width(day, size) + 10, 7 * size + 10
+        c.d.rounded_rectangle((M - 2, y - 2, M - 2 + w, y - 2 + h), radius=6, fill=0)
+        badge = Canvas()
+        badge.text(0, 0, day, size)
+        mask = badge.img.crop((0, 0, c.width(day, size), 7 * size)).point(lambda v: 255 - v * 255).convert("1")
+        c.img.paste(1, (M + 3, y + 3), mask)
+        y += h + 6
+    else:
+        c.text(M, y, day, size)
+        y += 7 * size + 6
+        c.text(M, y, f"IN {nxt['in_days']} DAYS", 2, GREY)
+        y += 22
+    bins = " + ".join(nxt.get("bins") or [])
+    bsize = 3 if fits(bins, 10, 2) else 2
+    for ln in wrap(bins, 10 if bsize == 3 else 15, 2):
+        c.text(M, y, ln, bsize)
+        y += 8 * bsize + 4
+    if len(days) > 1 and y < BOTTOM - 36:
+        then = days[1]
+        c.text(M, BOTTOM - 36, f"THEN {then.get('day', '')}", 2, GREY)
+        c.text(M, BOTTOM - 16, fit_chars(" + ".join(then.get("bins") or []), 2, W - 2 * M), 2, GREY)
+
+
 def clock_text(epoch: int, tz) -> str:
     return datetime.fromtimestamp(epoch, tz).strftime("%H:%M")
 
@@ -477,7 +515,7 @@ def parse_views(spec: str) -> list[str]:
         v = v.strip().lower()
         if v.split(":")[0] in VIEWS:
             out.append(v)
-    return out or ["news", "news:2", "weather", "travel", "cal", "fpl"]
+    return out or ["news", "news:2", "weather", "travel", "cal", "fpl", "bins"]
 
 
 # ── Which screens, and which first ────────────────────────
@@ -513,6 +551,9 @@ def has_content(view: str, data: dict, now: datetime) -> bool:
     if name == "weather":
         d = data.get("weather")
         return isinstance(d, dict) and d.get("setup") is not False
+    if name == "bins":
+        d = data.get("bins")
+        return isinstance(d, dict) and d.get("setup") is not False and (not d.get("ok") or bool(d.get("days")))
     if name == "fpl":
         d = data.get("fpl")
         if not isinstance(d, dict) or d.get("setup") is False:
@@ -543,15 +584,21 @@ COMMUTE_DEFAULT = "06:30-09:30,16:30-19:00"
 def first_view(views: list[str], data: dict, now: datetime, commute: list[tuple[int, int]]) -> str:
     """The screen that suits the moment, first match wins:
     1. Calendar, when something starts within 30 minutes or is happening now.
-    2. Travel, on a weekday inside a commute window.
-    3. Fantasy PL, while a gameweek is live or the deadline is within 24 hours.
-    4. Otherwise the first screen in EINK_VIEWS."""
+    2. Bin day, from 17:00 the evening before a collection until 09:00 on the day.
+    3. Travel, on a weekday inside a commute window.
+    4. Fantasy PL, while a gameweek is live or the deadline is within 24 hours.
+    5. Otherwise the first screen in EINK_VIEWS."""
     t = int(now.timestamp())
     cal = data.get("cal") if isinstance(data.get("cal"), dict) else {}
     if "cal" in views and cal.get("ok"):
         for e in cal.get("events") or []:
             if not e.get("all_day") and e.get("start") and e["start"] - 30 * 60 <= t < e.get("end", e["start"]):
                 return "cal"
+    bins = data.get("bins") if isinstance(data.get("bins"), dict) else {}
+    nxt = (bins.get("days") or [{}])[0] if bins.get("ok") else {}
+    if "bins" in views and ((nxt.get("in_days") == 1 and now.hour >= 17)
+                            or (nxt.get("in_days") == 0 and now.hour < 9)):
+        return "bins"   # the evening before, and first thing on the day
     mins = now.hour * 60 + now.minute
     if "travel" in views and now.weekday() < 5 and any(a <= mins < b for a, b in commute):
         return "travel"
@@ -584,6 +631,8 @@ def render(view: str, data: dict, now: datetime, batt: int = -1, page: int = 0, 
         view_travel(c, data.get("bus"), data.get("rail"), now)
     elif name == "weather":
         view_weather(c, data.get("weather"), now)
+    elif name == "bins":
+        view_bins(c, data.get("bins"), now)
     elif name == "cal":
         view_cal(c, data.get("cal"), now)
     elif name == "fpl":

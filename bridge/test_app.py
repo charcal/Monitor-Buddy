@@ -475,7 +475,7 @@ def test_eink_panel_bytes_layout():
 
 def test_eink_views_parse():
     import eink
-    assert eink.parse_views("") == ["news", "news:2", "weather", "travel", "cal", "fpl"]
+    assert eink.parse_views("") == ["news", "news:2", "weather", "travel", "cal", "fpl", "bins"]
     assert eink.parse_views("news, news:2,bogus,FPL") == ["news", "news:2", "fpl"]
 
 
@@ -692,3 +692,21 @@ def test_weather_rain_outlook_and_fetch(bridge, monkeypatch):
     got = c.post("/api/eink-settings", json=body).get_json()
     assert got["weather"] == {"lat": "51.4700", "lon": "0.0780", "label": "SOMEWHERE"}
     assert c.post("/api/eink-settings", json=dict(body, weather={"lat": "x"})).status_code == 400
+
+
+def test_eink_bins_screen_and_first_screen():
+    import eink
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo("Europe/London")
+    tomorrow = {"ok": True, "setup": True, "days": [{"day": "TOMORROW", "in_days": 1, "bins": ["BLACK", "FOOD"]},
+                                                     {"day": "THU 5", "in_days": 8, "bins": ["BLUE"]}]}
+    later = {"ok": True, "setup": True, "days": [{"day": "THU", "in_days": 4, "bins": ["BLUE"]}]}
+    views = ["news", "bins"]
+    data = {"news": {"ok": True, "setup": True, "items": [{"title": "A"}]}}
+    evening = datetime(2026, 10, 25, 19, 0, tzinfo=tz)
+    assert eink.arrange(views, dict(data, bins=tomorrow), evening, [])[0] == "bins"
+    assert eink.arrange(views, dict(data, bins=tomorrow), evening.replace(hour=12), [])[0] == "news"
+    assert eink.arrange(views, dict(data, bins=later), evening, [])[0] == "news"
+    assert "bins" not in eink.arrange(views, dict(data, bins={"ok": False, "setup": False}), evening, [])
+    for b in (tomorrow, later, {"ok": True, "setup": True, "days": []}, {"ok": False, "setup": True, "error": "x"}):
+        assert len(eink.panel_bytes(eink.render("bins", {"bins": b}, evening))) == 5000

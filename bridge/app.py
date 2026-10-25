@@ -1119,6 +1119,7 @@ EINK_SOURCES = {
     "travel": lambda: {"bus": cache.get("bus", 15, lambda: _safe(fetch_bus)), "rail": eink_rail()},
     "cal": lambda: {"cal": cache.get("cal:False", 60, lambda: _safe(lambda: fetch_cal(False)))},
     "fpl": lambda: {"fpl": cache.get("fpl", 60, lambda: _safe(fetch_fpl))},
+    "bins": lambda: {"bins": cache.get("bins", 300, lambda: _safe(fetch_bins))},
     "weather": lambda: {"weather": cache.get(f"weather:{eink_setting('EINK_WEATHER')}", 600,
                                              lambda: _safe(fetch_weather))},
 }
@@ -1185,7 +1186,7 @@ def eink_settings_json() -> dict:
     return {"ok": True, "views": views, "theme": "dark" if eink_setting("EINK_THEME").lower() == "dark" else "light",
             "rail": rail, "commute": windows, "saved": bool(eink_saved()),
             "weather": eink_weather_json(),
-            "available_views": ["news", "news:2", "news:3", "weather", "travel", "cal", "fpl"]}
+            "available_views": ["news", "news:2", "news:3", "weather", "travel", "cal", "fpl", "bins"]}
 
 
 def eink_weather_json():

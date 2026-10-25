@@ -3,7 +3,7 @@
 
 export const VIEW_NAMES = {
   news: "Headline 1", "news:2": "Headline 2", "news:3": "Headline 3", weather: "Weather",
-  travel: "Travel (buses and rail)", cal: "Calendar", fpl: "Fantasy PL",
+  travel: "Travel (buses and rail)", cal: "Calendar", fpl: "Fantasy PL", bins: "Bin day",
 };
 
 // TfL line ids offered as tick boxes; any other saved line is listed too.

@@ -33,6 +33,10 @@ hours of the forecast, plus wind and today's high and low. It uses Open-Meteo
 (free, no account). Pick the place on the settings page; until then the
 screen is skipped.
 
+**Bin day** is the desk Buddy's bin page: the next collection day big (in a
+black badge when it's today or tomorrow), which bins, and the one after. It
+uses the same `BINS` setting in the `.env`, bank-holiday shifts included.
+
 **Screens with nothing to show are skipped**: no buses due and no rail
 problems, nothing on the calendar, no gameweek. A source that's set up but
 failing still shows, so you can see it's broken.
@@ -40,10 +44,11 @@ failing still shows, so you can see it's broken.
 **The first screen suits the moment.** Switching on (and wrapping round) starts at:
 
 1. **Calendar**, when something starts within 30 minutes or is on now;
-2. **Travel**, on a weekday during your commute (`EINK_COMMUTE`, by default
+2. **Bin day**, from 17:00 the evening before a collection until 09:00 on the day;
+3. **Travel**, on a weekday during your commute (`EINK_COMMUTE`, by default
    `06:30-09:30,16:30-19:00`; `off` to turn it off);
-3. **Fantasy PL**, while a gameweek is live or the deadline is within 24 hours;
-4. otherwise the first screen in `EINK_VIEWS`.
+4. **Fantasy PL**, while a gameweek is live or the deadline is within 24 hours;
+5. otherwise the first screen in `EINK_VIEWS`.
 
 The rest follow in your `EINK_VIEWS` order.
 
